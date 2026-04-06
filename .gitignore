@@ -1,5 +1,18 @@
+# --- Секреты и База данных ---
 .env
-.venv/
-__pycache__/
+*.db
 *.sqlite
+*.sqlite3
 data/
+
+# --- Окружение и кэш Python ---
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# --- Настройки IDE и ОС ---
+.idea/
+.vscode/
+.DS_Store
