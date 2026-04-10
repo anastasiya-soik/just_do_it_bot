@@ -27,10 +27,6 @@ def start_date_keyboard() -> InlineKeyboardMarkup:
     ])
 
 def settings_keyboard(silent: bool, policy: DayStatus, time: str) -> InlineKeyboardMarkup:
-    """
-    policy: DayStatus enum.
-    Сравниваем через .value чтобы быть явными и избежать неявной конвертации строк.
-    """
     s_icon = "🔇" if silent else "🔊"
     policy_val = policy.value if hasattr(policy, "value") else policy
     p_icon = "⚠️ срыв" if policy_val == DayStatus.fail.value else "⏭ пропуск"
