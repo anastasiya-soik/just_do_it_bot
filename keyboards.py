@@ -35,12 +35,31 @@ def settings_keyboard(silent: bool, policy: DayStatus, time: str) -> InlineKeybo
         [InlineKeyboardButton(text="🌍 сменить пояс",           callback_data="set_tz_prompt")],
         [InlineKeyboardButton(text=f"{s_icon} без звука",      callback_data="toggle_silent")],
         [InlineKeyboardButton(text=f"🔄 если забыл: {p_icon}", callback_data="toggle_policy")],
+        [InlineKeyboardButton(text="🧊 купить заморозки",       callback_data="buy_freeze_menu")],
         [InlineKeyboardButton(text="❌ закрыть",                callback_data="close_settings")],
+    ])
+
+def freeze_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧊 1 заморозка — 15 ⭐️",  callback_data="buy_freeze_1")],
+        [InlineKeyboardButton(text="🧊🧊🧊 3 заморозки — 30 ⭐️", callback_data="buy_freeze_3")],
+        [InlineKeyboardButton(text="❌ отмена",                 callback_data="close_settings")],
+    ])
+
+def onboarding_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 первый челлендж", callback_data="onboarding_start")],
+        [InlineKeyboardButton(text="📖 как это работает", callback_data="onboarding_guide")],
     ])
 
 async def set_main_menu(bot: Bot) -> None:
     await bot.set_my_commands([
-        BotCommand(command="/start",  description="меню"),
-        BotCommand(command="/cancel", description="отмена"),
-        BotCommand(command="/help",   description="инфо"),
+        BotCommand(command="/start",       description="меню"),
+        BotCommand(command="/help",        description="как пользоваться"),
+        BotCommand(command="/cancel",      description="отмена"),
+        BotCommand(command="/broadcast",    description="рассылка (админ)"),
+        BotCommand(command="/stats_admin",  description="статистика (админ)"),
+        BotCommand(command="/premium_on",   description="выдать премиум (админ)"),
+        BotCommand(command="/premium_off",  description="снять премиум (админ)"),
+        BotCommand(command="/premium_list", description="список премиум (админ)"),
     ])

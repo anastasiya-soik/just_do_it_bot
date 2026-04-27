@@ -36,12 +36,15 @@ class User(Base):
         Enum(DayStatus, native_enum=False), default=DayStatus.skip
     )
 
-    last_notified_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_notified_at:    Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_weekly_stats_at:  Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_motivation_at:    Mapped[date | None] = mapped_column(Date, nullable=True)
     xp:               Mapped[int]         = mapped_column(Integer, default=0)
 
     # default=0: первая заморозка выдаётся за стрик 7 дней через check_milestone,
     # не авансом при регистрации
-    freeze_count: Mapped[int] = mapped_column(Integer, default=0)
+    freeze_count:    Mapped[int]  = mapped_column(Integer, default=0)
+    premium_customs: Mapped[bool] = mapped_column(Boolean, default=False)
 
     challenges: Mapped[list["Challenge"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
@@ -55,7 +58,6 @@ class Challenge(Base):
     user_id:        Mapped[int]             = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    # String(50) достаточно для ключей типа "no_alcohol" — было излишне String(255)
     challenge_type: Mapped[str]             = mapped_column(String(50))
     status:         Mapped[ChallengeStatus] = mapped_column(
         Enum(ChallengeStatus, native_enum=False), default=ChallengeStatus.active
@@ -65,6 +67,9 @@ class Challenge(Base):
     completed_at:   Mapped[date | None]     = mapped_column(Date, nullable=True)
     current_streak: Mapped[int]             = mapped_column(Integer, default=0)
     longest_streak: Mapped[int]             = mapped_column(Integer, default=0)
+    partner_challenge_id: Mapped[int | None] = mapped_column(
+        ForeignKey("challenges.id", ondelete="SET NULL"), nullable=True
+    )
 
     user: Mapped["User"]               = relationship(back_populates="challenges")
     days: Mapped[list["ChallengeDay"]] = relationship(
@@ -87,3 +92,12 @@ class ChallengeDay(Base):
     __table_args__ = (
         UniqueConstraint("challenge_id", "date", name="_challenge_date_uc"),
     )
+
+
+class PartnerInvite(Base):
+    __tablename__ = "partner_invites"
+
+    id:           Mapped[int]  = mapped_column(primary_key=True, autoincrement=True)
+    token:        Mapped[str]  = mapped_column(String(32), unique=True, index=True)
+    challenge_id: Mapped[int]  = mapped_column(ForeignKey("challenges.id", ondelete="CASCADE"))
+    created_at:   Mapped[date] = mapped_column(Date)

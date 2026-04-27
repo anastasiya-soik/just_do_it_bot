@@ -9,3 +9,4 @@ class ChallengeState(StatesGroup):
     setting_report_time = State()           # Настройка времени отчетов
     setting_start_date = State()            # Ввод своей даты старта (миграция)
     waiting_for_custom_name = State()       # Ввод имени своего челленджа
+    broadcast_text = State()               # Ввод текста рассылки (только для админа)

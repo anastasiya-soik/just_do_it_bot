@@ -2,7 +2,9 @@ import asyncio
 import logging
 import os
 import random
+import secrets
 import sentry_sdk
+import httpx
 from datetime import date, datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
@@ -12,23 +14,31 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardButton,
-    InlineKeyboardMarkup, BotCommand, FSInputFile, ErrorEvent, ReplyKeyboardRemove
+    InlineKeyboardMarkup, BotCommand, FSInputFile, ErrorEvent, ReplyKeyboardRemove,
+    LabeledPrice, PreCheckoutQuery
 )
 from sqlalchemy import select, and_, update, func
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
 from database import async_session_maker, init_db, engine
-from models import User, Challenge, ChallengeDay, ChallengeStatus, DayStatus
+from models import User, Challenge, ChallengeDay, ChallengeStatus, DayStatus, PartnerInvite
 from states import ChallengeState
 from keyboards import (
-    main_menu_keyboard, settings_keyboard, set_main_menu, start_date_keyboard,
+    main_menu_keyboard, settings_keyboard, freeze_keyboard, set_main_menu, start_date_keyboard,
+    onboarding_keyboard,
     BTN_MY_CHALLENGES, BTN_NEW_CHALLENGE, BTN_EDIT_HISTORY, BTN_SETTINGS
 )
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SENTRY_DSN = os.getenv("SENTRY_DSN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+STARS_CUSTOM_PRICE = 100
+STARS_FREEZE_1     = 15
+STARS_FREEZE_3     = 30
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 # --- МОНИТОРИНГ ---
 if SENTRY_DSN:
@@ -42,6 +52,29 @@ if SENTRY_DSN:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
 router = Router()
+
+class EnsureUserMiddleware(BaseMiddleware):
+    """Авто-создаёт юзера при первом контакте, чтобы scalar_one() не падал."""
+    async def __call__(self, handler, event, data):
+        from aiogram.types import Message, CallbackQuery
+        obj = event
+        tg_user = None
+        if isinstance(obj, Message):
+            tg_user = obj.from_user
+        elif isinstance(obj, CallbackQuery):
+            tg_user = obj.from_user
+        if tg_user:
+            async with async_session_maker() as session:
+                exists = (await session.execute(
+                    select(User).where(User.telegram_id == tg_user.id)
+                )).scalar_one_or_none()
+                if not exists:
+                    session.add(User(
+                        telegram_id=tg_user.id,
+                        username=tg_user.username
+                    ))
+                    await session.commit()
+        return await handler(event, data)
 
 CHALLENGE_NAMES = {
     "no_alcohol":   "🍷 алко-пауза",
@@ -105,7 +138,10 @@ async def get_heatmap(session, challenge_id: int) -> str:
     return "".join(line)
 
 async def recalculate_streak(session, challenge_id: int) -> int:
-   #Пересчёт стрика по истории дней.
+    c = (await session.execute(
+        select(Challenge).where(Challenge.id == challenge_id)
+    )).scalar_one()
+
     res = await session.execute(
         select(ChallengeDay)
         .where(ChallengeDay.challenge_id == challenge_id)
@@ -113,27 +149,33 @@ async def recalculate_streak(session, challenge_id: int) -> int:
     )
     days = {d.date: d.status for d in res.scalars().all()}
 
+    partner_days: dict = {}
+    if c.partner_challenge_id:
+        res2 = await session.execute(
+            select(ChallengeDay).where(ChallengeDay.challenge_id == c.partner_challenge_id)
+        )
+        partner_days = {d.date: d.status for d in res2.scalars().all()}
+
     current_streak = 0
     check_date = date.today()
-    # Если сегодня ещё нет отметки — начинаем со вчера
     if check_date not in days:
         check_date -= timedelta(days=1)
 
     while check_date in days:
         status = days[check_date]
-        if status in (DayStatus.success, DayStatus.skip):
+        ok = status in (DayStatus.success, DayStatus.skip)
+        if c.partner_challenge_id:
+            p_status = partner_days.get(check_date)
+            ok = ok and p_status in (DayStatus.success, DayStatus.skip)
+        if ok:
             current_streak += 1
         else:
             break
         check_date -= timedelta(days=1)
 
-    c = (await session.execute(
-        select(Challenge).where(Challenge.id == challenge_id)
-    )).scalar_one()
     c.current_streak = current_streak
     if current_streak > c.longest_streak:
         c.longest_streak = current_streak
-    # Коммит делает вызывающая сторона
     return current_streak
 
 async def check_milestone(event, streak: int, c_name: str, session=None) -> None:
@@ -187,6 +229,118 @@ def get_status_kb(c_id: int, d_str: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="❌ закрыть",    callback_data="close_settings")]
     ])
 
+MONTH_NAMES_RU = ["января","февраля","марта","апреля","мая","июня",
+                  "июля","августа","сентября","октября","ноября","декабря"]
+
+async def get_ai_motivation(context: str) -> str:
+    if not GEMINI_API_KEY:
+        return random.choice(TIPS)
+    prompt = (
+        "Ты — поддерживающий коуч по формированию привычек. "
+        "Напиши одно короткое мотивационное сообщение (1-2 предложения) на русском языке. "
+        f"Контекст: {context}. "
+        "Без лишних слов, без восклицаний через слово, живо и по-человечески."
+    )
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                GEMINI_URL,
+                params={"key": GEMINI_API_KEY},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"maxOutputTokens": 100, "temperature": 0.9}
+                }
+            )
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception:
+        return random.choice(TIPS)
+
+def build_unified_check_kb(
+    challenges_with_status: list[tuple],
+    d_str: str
+) -> InlineKeyboardMarkup:
+    rows = []
+    status_icons = {DayStatus.success: "✅", DayStatus.fail: "😵", DayStatus.skip: "⏭"}
+    for c, day_status in challenges_with_status:
+        name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+        if day_status is not None:
+            icon = status_icons.get(day_status, "✅")
+            rows.append([InlineKeyboardButton(text=f"{name}  {icon} отмечено", callback_data="noop")])
+        else:
+            rows.append([
+                InlineKeyboardButton(text=name,  callback_data="noop"),
+                InlineKeyboardButton(text="✅",   callback_data=f"save_{c.id}_{d_str}_success"),
+                InlineKeyboardButton(text="😵",   callback_data=f"save_{c.id}_{d_str}_fail"),
+                InlineKeyboardButton(text="⏭",   callback_data=f"save_{c.id}_{d_str}_skip"),
+            ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
+    await session.execute(
+        update(Challenge)
+        .where(and_(
+            Challenge.target_date < date.today(),
+            Challenge.status == ChallengeStatus.active
+        ))
+        .values(status=ChallengeStatus.completed, completed_at=date.today())
+    )
+    await session.commit()
+
+    challenges = (await session.execute(
+        select(Challenge).where(and_(
+            Challenge.user_id == user.id,
+            Challenge.status == ChallengeStatus.active
+        ))
+    )).scalars().all()
+
+    report = f"{get_user_rank(user.xp)}\n"
+    kb_delete = InlineKeyboardMarkup(inline_keyboard=[])
+
+    if not challenges:
+        report += (
+            "\n\nпока пусто 👀\n\n"
+            "запусти первый челлендж — и я начну считать твои победы.\n"
+            "жми <b>➕ новый челлендж</b> в меню"
+        )
+    else:
+        for c in challenges:
+            stats_res = await session.execute(
+                select(
+                    func.count(ChallengeDay.id).filter(ChallengeDay.status == DayStatus.success),
+                    func.count(ChallengeDay.id).filter(ChallengeDay.status == DayStatus.fail)
+                ).where(ChallengeDay.challenge_id == c.id)
+            )
+            success_count, fail_count = stats_res.fetchone()
+            days_in = max(1, (date.today() - c.start_date).days + 1)
+            heatmap = await get_heatmap(session, c.id)
+            name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+
+            report += f"\n{name}\n"
+            report += f"— {c.current_streak} {plural_days(c.current_streak)} подряд\n"
+            report += f"— рекорд {c.longest_streak} {plural_days(c.longest_streak)}\n"
+            report += f"— {success_count} побед, {fail_count} срывов\n"
+            report += f"— эта неделя: {heatmap}\n"
+
+            if c.target_date:
+                full_dist = max(1, (c.target_date - c.start_date).days)
+                pct = min(100, max(0, int((date.today() - c.start_date).days / full_dist * 100)))
+                report += f"— до финиша: {get_progress_bar(pct)} {pct}%\n"
+
+            kb_delete.inline_keyboard.append([
+                InlineKeyboardButton(text=f"🗑 отменить {name}", callback_data=f"drop_{c.id}")
+            ])
+
+    completed_count = (await session.execute(
+        select(func.count(Challenge.id)).where(and_(
+            Challenge.user_id == user.id,
+            Challenge.status == ChallengeStatus.completed
+        ))
+    )).scalar()
+
+    report += f"\nзавершено: {completed_count}   заморозок: {user.freeze_count}"
+    return report, kb_delete
+
 # ==========================================
 # ЧАСТЬ 2: ОНБОРДИНГ И КОМАНДЫ
 # ==========================================
@@ -213,8 +367,156 @@ async def cmd_cancel(message: Message, state: FSMContext):
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(
-        "отмечай успехи каждый вечер.\n"
-        "если забыл — кнопка <b>«📝 поправить день»</b> в помощь 🤝",
+        "📖 <b>как пользоваться ботом</b>\n\n"
+        "<b>➕ новый челлендж</b>\n"
+        "выбери привычку или создай свою. укажи дату старта и режим:\n"
+        "• <b>стрик</b> — считаешь дни подряд без срывов\n"
+        "• <b>до даты</b> — идёшь к конкретному финишу\n\n"
+        "<b>📊 мой прогресс</b>\n"
+        "статистика по всем активным челленджам: стрик, рекорд, тепловая карта недели\n\n"
+        "<b>🔔 ежедневный чек</b>\n"
+        "бот пришлёт сводку вечером — отметишь все челленджи одним сообщением\n\n"
+        "<b>📝 поправить день</b>\n"
+        "забыл отметить вчера? измени статус любого прошедшего дня\n\n"
+        "<b>🧊 заморозки</b>\n"
+        "копятся за стрики 7, 14, 30, 60, 100 дней. спасают стрик при разовом срыве\n\n"
+        "<b>⚙️ настройки</b>\n"
+        "время уведомлений, часовой пояс, режим пропущенных дней\n\n"
+        "📊 еженедельная статистика приходит автоматически по понедельникам в 10:00",
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_menu_keyboard()
+    )
+
+@router.message(Command("broadcast"))
+async def cmd_broadcast(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    user_count = 0
+    async with async_session_maker() as session:
+        user_count = (await session.execute(
+            select(func.count(User.id)).where(User.utc_offset.is_not(None))
+        )).scalar()
+    await message.answer(
+        f"📢 <b>рассылка</b>\n\n"
+        f"активных пользователей: <b>{user_count}</b>\n\n"
+        f"напиши текст сообщения (поддерживается HTML-разметка).\n"
+        f"/cancel — отмена",
+        parse_mode=ParseMode.HTML
+    )
+    await state.set_state(ChallengeState.broadcast_text)
+
+@router.message(StateFilter(ChallengeState.broadcast_text))
+async def do_broadcast(message: Message, state: FSMContext, bot: Bot):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    text = message.text or message.caption or ""
+    if not text:
+        return await message.answer("пустое сообщение, отмена")
+
+    async with async_session_maker() as session:
+        users = (await session.execute(
+            select(User).where(User.utc_offset.is_not(None))
+        )).scalars().all()
+        tg_ids = [u.telegram_id for u in users]
+
+    sent = 0
+    failed = 0
+    status_msg = await message.answer(f"⏳ отправляю... 0 / {len(tg_ids)}")
+    for i, tg_id in enumerate(tg_ids):
+        try:
+            await bot.send_message(tg_id, text, parse_mode=ParseMode.HTML)
+            sent += 1
+        except Exception:
+            failed += 1
+        if (i + 1) % 20 == 0:
+            try:
+                await status_msg.edit_text(f"⏳ отправляю... {i+1} / {len(tg_ids)}")
+            except Exception:
+                pass
+
+    await status_msg.edit_text(
+        f"✅ рассылка завершена\n\n"
+        f"отправлено: {sent}\n"
+        f"ошибок: {failed}"
+    )
+
+@router.message(Command("premium_on"))
+async def cmd_premium_on(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        return await message.answer("использование: /premium_on &lt;telegram_id или @username&gt;", parse_mode=ParseMode.HTML)
+    await _set_premium(message, args[1].strip(), True)
+
+@router.message(Command("premium_off"))
+async def cmd_premium_off(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        return await message.answer("использование: /premium_off &lt;telegram_id или @username&gt;", parse_mode=ParseMode.HTML)
+    await _set_premium(message, args[1].strip(), False)
+
+@router.message(Command("premium_list"))
+async def cmd_premium_list(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    async with async_session_maker() as session:
+        users = (await session.execute(
+            select(User).where(User.premium_customs == True)
+        )).scalars().all()
+    if not users:
+        return await message.answer("премиум-пользователей нет")
+    lines = [f"• {u.telegram_id} (@{u.username or '—'})" for u in users]
+    await message.answer(f"⭐️ <b>премиум ({len(users)})</b>\n\n" + "\n".join(lines), parse_mode=ParseMode.HTML)
+
+async def _set_premium(message: Message, target: str, value: bool):
+    async with async_session_maker() as session:
+        if target.startswith("@"):
+            username = target.lstrip("@")
+            u = (await session.execute(
+                select(User).where(User.username == username)
+            )).scalar_one_or_none()
+        else:
+            try:
+                tg_id = int(target)
+            except ValueError:
+                return await message.answer("неверный формат — укажи числовой id или @username")
+            u = (await session.execute(
+                select(User).where(User.telegram_id == tg_id)
+            )).scalar_one_or_none()
+
+        if not u:
+            return await message.answer("пользователь не найден")
+
+        u.premium_customs = value
+        await session.commit()
+        status = "⭐️ выдан" if value else "снят"
+        await message.answer(f"{status} премиум для {u.telegram_id} (@{u.username or '—'})")
+
+@router.message(Command("stats_admin"))
+async def cmd_stats_admin(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    async with async_session_maker() as session:
+        total_users = (await session.execute(select(func.count(User.id)))).scalar()
+        active_users = (await session.execute(
+            select(func.count(User.id)).where(User.utc_offset.is_not(None))
+        )).scalar()
+        total_challenges = (await session.execute(
+            select(func.count(Challenge.id)).where(Challenge.status == ChallengeStatus.active)
+        )).scalar()
+        premium_users = (await session.execute(
+            select(func.count(User.id)).where(User.premium_customs == True)
+        )).scalar()
+    await message.answer(
+        f"📊 <b>статистика бота</b>\n\n"
+        f"всего пользователей: <b>{total_users}</b>\n"
+        f"настроили часовой пояс: <b>{active_users}</b>\n"
+        f"активных челленджей: <b>{total_challenges}</b>\n"
+        f"premium_customs: <b>{premium_users}</b>",
         parse_mode=ParseMode.HTML
     )
 
@@ -222,6 +524,38 @@ async def cmd_help(message: Message):
 @router.message(F.text.casefold().in_({"старт", "start", "меню", "menu"}))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
+
+    # Handle partner invite deep link: /start join_TOKEN
+    if message.text and message.text.startswith("/start "):
+        param = message.text.split(maxsplit=1)[1]
+        if param.startswith("join_"):
+            token = param[5:]
+            async with async_session_maker() as session:
+                invite = (await session.execute(
+                    select(PartnerInvite).where(PartnerInvite.token == token)
+                )).scalar_one_or_none()
+                if not invite:
+                    return await message.answer("ссылка недействительна или уже использована 🤷")
+                a_challenge = (await session.execute(
+                    select(Challenge).where(Challenge.id == invite.challenge_id)
+                )).scalar_one()
+                a_user = (await session.execute(
+                    select(User).where(User.id == a_challenge.user_id)
+                )).scalar_one()
+            name = CHALLENGE_NAMES.get(a_challenge.challenge_type, a_challenge.challenge_type)
+            partner_name = a_user.username or str(a_user.telegram_id)
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ принять вызов!", callback_data=f"partner_accept_{token}")],
+                [InlineKeyboardButton(text="❌ отклонить",      callback_data="close_settings")]
+            ])
+            return await message.answer(
+                f"👥 <b>приглашение на парный челлендж</b>\n\n"
+                f"@{partner_name} зовёт тебя делать <b>{name}</b> вместе.\n"
+                "общий стрик — оба должны отмечать каждый день, иначе стрик сбрасывается у обоих.",
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
+            )
+
     async with async_session_maker() as session:
         user = (await session.execute(
             select(User).where(User.telegram_id == message.from_user.id)
@@ -240,14 +574,15 @@ async def cmd_start(message: Message, state: FSMContext):
             ]])
             await send_with_image(
                 message, "media/welcome.jpg",
-                "хей! я помогу строить контроль над привычками ✨\n\n"
-                "чтобы присылать напоминания вовремя, скажи который сейчас час?\n"
-                "просто цифра, например: <code>14</code>",
+                "привет! я помогу избавиться от привычки, которая мешает 🧊\n\n"
+                "сначала настрою уведомления под твой часовой пояс.\n"
+                "напиши <b>который сейчас час</b> — просто цифра:\n"
+                "например: <code>14</code>",
                 reply_markup=kb_cancel
             )
             await state.set_state(ChallengeState.waiting_for_time)
         else:
-            await message.answer("о, приветы! продолжаем?", reply_markup=main_menu_keyboard())
+            await message.answer("с возвращением 👋 продолжаем?", reply_markup=main_menu_keyboard())
 
 @router.message(StateFilter(ChallengeState.waiting_for_time))
 async def set_timezone(message: Message, state: FSMContext):
@@ -271,25 +606,19 @@ async def set_timezone(message: Message, state: FSMContext):
             u.utc_offset = offset
             await session.commit()
 
-        guide = (
+        onboarding_text = (
             f"✅ понял, UTC{offset:+d} — буду приходить вовремя\n\n"
-            "▸ цель\n"
-            "  без алкоголя, сахара, фастфуда, сигарет или шортсов\n\n"
-            "▸ старт\n"
-            "  сегодня или задним числом — если уже начал раньше\n\n"
-            "▸ режим\n"
-            "  стрик — бьёшь личный рекорд дней подряд\n"
-            "  до даты — идёшь к конкретному финишу\n\n"
-            "▸ напоминания\n"
-            "  в любое время — ты сам выставляешь когда удобно\n\n"
-            "▸ если сорвался\n"
-            "  заморозка сохранит стрик\n"
-            "  поправить день можно задним числом\n\n"
-            "▸ заморозки\n"
-            "  копятся за стрики: 7, 14, 30, 60, 100 дней 🧊\n\n"
-            "начнём?"
+            "каждый день отмечаешь победу или срыв.\n"
+            "за стрики копятся заморозки 🧊, XP и звания.\n"
+            "пропустил день — поправишь задним числом.\n\n"
+            "с чего начнём?"
         )
-        await message.answer(guide, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
+        await message.answer(
+            onboarding_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_keyboard()
+        )
+        await message.answer("👇", reply_markup=onboarding_keyboard())
         await state.clear()
 
     except ValueError:
@@ -298,6 +627,45 @@ async def set_timezone(message: Message, state: FSMContext):
             parse_mode=ParseMode.HTML
         )
 
+@router.callback_query(F.data == "onboarding_start")
+async def onboarding_start_challenge(callback: CallbackQuery, state: FSMContext):
+    await callback.message.delete()
+    kb_buttons = [
+        [InlineKeyboardButton(text=v, callback_data=f"new_{k}")]
+        for k, v in CHALLENGE_NAMES.items()
+    ]
+    kb_buttons.append([InlineKeyboardButton(text="✍️ свой челлендж", callback_data="new_custom")])
+    kb_buttons.append([InlineKeyboardButton(text="❌ отмена",         callback_data="close_settings")])
+    await callback.message.answer(
+        "какой челлендж запустим?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons)
+    )
+
+@router.callback_query(F.data == "onboarding_guide")
+async def onboarding_guide_cb(callback: CallbackQuery):
+    guide = (
+        "▸ <b>цель</b>\n"
+        "  без алкоголя, сахара, фастфуда, сигарет или шортсов\n\n"
+        "▸ <b>старт</b>\n"
+        "  сегодня или задним числом — если уже начал раньше\n\n"
+        "▸ <b>режим</b>\n"
+        "  стрик — бьёшь личный рекорд дней подряд\n"
+        "  до даты — идёшь к конкретному финишу\n\n"
+        "▸ <b>напоминания</b>\n"
+        "  в любое время — ты сам выставляешь когда удобно\n\n"
+        "▸ <b>если сорвался</b>\n"
+        "  заморозка сохранит стрик\n"
+        "  поправить день можно задним числом\n\n"
+        "▸ <b>заморозки</b>\n"
+        "  копятся за стрики: 7, 14, 30, 60, 100 дней 🧊"
+    )
+    await callback.message.edit_text(guide, parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+@router.callback_query(F.data == "noop")
+async def noop_cb(callback: CallbackQuery):
+    await callback.answer()
+
 # ==========================================
 # ЧАСТЬ 3: МОИ ЧЕЛЛЕНДЖИ И УДАЛЕНИЕ
 # ==========================================
@@ -305,72 +673,10 @@ async def set_timezone(message: Message, state: FSMContext):
 @router.message(F.text == BTN_MY_CHALLENGES)
 async def my_challenges_cmd(message: Message):
     async with async_session_maker() as session:
-        # Автозавершение истёкших — side-effect осознанный, дешевле отдельного job
-        await session.execute(
-            update(Challenge)
-            .where(and_(
-                Challenge.target_date < date.today(),
-                Challenge.status == ChallengeStatus.active
-            ))
-            .values(status=ChallengeStatus.completed, completed_at=date.today())
-        )
-        await session.commit()
-
         u = (await session.execute(
             select(User).where(User.telegram_id == message.from_user.id)
         )).scalar_one()
-
-        res = await session.execute(
-            select(Challenge).where(and_(
-                Challenge.user_id == u.id,
-                Challenge.status == ChallengeStatus.active
-            ))
-        )
-        challenges = res.scalars().all()
-
-        report = f"{get_user_rank(u.xp)}\n"
-        kb_delete = InlineKeyboardMarkup(inline_keyboard=[])
-
-        if not challenges:
-            report += "\nактивных челленджей пока нет — жми «➕ новый»"
-        else:
-            for c in challenges:
-                stats_res = await session.execute(
-                    select(
-                        func.count(ChallengeDay.id).filter(ChallengeDay.status == DayStatus.success),
-                        func.count(ChallengeDay.id).filter(ChallengeDay.status == DayStatus.fail)
-                    ).where(ChallengeDay.challenge_id == c.id)
-                )
-                success_count, fail_count = stats_res.fetchone()
-                days_in = max(1, (date.today() - c.start_date).days + 1)
-                eff = int(success_count / days_in * 100)
-                heatmap = await get_heatmap(session, c.id)
-                name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
-
-                report += f"\n{name}\n"
-                report += f"— {c.current_streak} {plural_days(c.current_streak)} подряд\n"
-                report += f"— рекорд {c.longest_streak} {plural_days(c.longest_streak)}\n"
-                report += f"— {success_count} побед, {fail_count} срывов\n"
-                report += f"— эта неделя: {heatmap}\n"
-
-                if c.target_date:
-                    full_dist = max(1, (c.target_date - c.start_date).days)
-                    pct = min(100, max(0, int((date.today() - c.start_date).days / full_dist * 100)))
-                    report += f"— до финиша: {get_progress_bar(pct)} {pct}%\n"
-
-                kb_delete.inline_keyboard.append([
-                    InlineKeyboardButton(text=f"🗑 отменить {name}", callback_data=f"drop_{c.id}")
-                ])
-
-        completed_count = (await session.execute(
-            select(func.count(Challenge.id)).where(and_(
-                Challenge.user_id == u.id,
-                Challenge.status == ChallengeStatus.completed
-            ))
-        )).scalar()
-
-        report += f"\nзавершено: {completed_count}   заморозок: {u.freeze_count}"
-
+        report, kb_delete = await build_stats_text(session, u)
         await send_with_image(message, "media/stats.jpg", report, reply_markup=kb_delete)
 
 @router.callback_query(F.data.startswith("drop_"))
@@ -407,30 +713,128 @@ async def new_challenge_start(message: Message, state: FSMContext):
         for k, v in CHALLENGE_NAMES.items()
     ]
     kb_buttons.append([InlineKeyboardButton(text="✍️ свой челлендж", callback_data="new_custom")])
+    kb_buttons.append([InlineKeyboardButton(text="👥 парный челлендж ⭐️", callback_data="new_partner")])
     kb_buttons.append([InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")])
     await message.answer("какой челлендж запустим?", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons))
 
 @router.callback_query(F.data == "new_custom")
 async def start_custom_name(callback: CallbackQuery, state: FSMContext):
-    #Отдельный handler для new_custom — зарегистрирован ДО startswith('new_').
     async with async_session_maker() as session:
         user = (await session.execute(
             select(User).where(User.telegram_id == callback.from_user.id)
         )).scalar_one()
-        active_custom = await session.execute(
+        active_custom = (await session.execute(
             select(func.count(Challenge.id)).where(and_(
                 Challenge.user_id == user.id,
                 Challenge.status == ChallengeStatus.active,
                 Challenge.challenge_type.notin_(CHALLENGE_NAMES.keys())
             ))
-        )
-        if active_custom.scalar() >= 1:
-            return await callback.answer(
-                "в бесплатной версии доступен только 1 свой челлендж 🌟\n\n(подписка Plus в разработке)",
-                show_alert=True
+        )).scalar()
+        if active_custom >= 1 and not user.premium_customs:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"⭐️ разблокировать за {STARS_CUSTOM_PRICE} ⭐️", callback_data="buy_custom_unlimited")],
+                [InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")]
+            ])
+            return await callback.message.edit_text(
+                "✍️ <b>свои челленджи — про-функция</b>\n\n"
+                "бесплатно доступен 1 кастомный челлендж.\n"
+                f"за <b>{STARS_CUSTOM_PRICE} ⭐️</b> — безлимит навсегда 🚀",
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
             )
     await callback.message.edit_text("как назовём твой челлендж?\nкоротко, до 30 символов:")
     await state.set_state(ChallengeState.waiting_for_custom_name)
+
+@router.callback_query(F.data == "buy_custom_unlimited")
+async def buy_custom_unlimited(callback: CallbackQuery, bot: Bot):
+    await callback.message.delete()
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title="Безлимитные кастомные челленджи",
+        description="Создавай любое количество своих челленджей — навсегда, без ограничений",
+        payload="custom_unlimited",
+        currency="XTR",
+        prices=[LabeledPrice(label="Безлимит", amount=STARS_CUSTOM_PRICE)],
+        provider_token="",
+    )
+    await callback.answer()
+
+@router.pre_checkout_query()
+async def pre_checkout(query: PreCheckoutQuery):
+    await query.answer(ok=True)
+
+@router.callback_query(F.data == "buy_freeze_menu")
+async def open_buy_freeze(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "🧊 <b>заморозки за звёздочки</b>\n\n"
+        "заморозка спасает стрик при срыве — день засчитывается как пропуск.\n\n"
+        "выбери вариант:",
+        reply_markup=freeze_keyboard(),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "buy_freeze_1")
+async def buy_freeze_1(callback: CallbackQuery, bot: Bot):
+    await callback.message.delete()
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title="1 заморозка",
+        description="Защитит стрик от одного срыва",
+        payload="freeze_1",
+        currency="XTR",
+        prices=[LabeledPrice(label="1 заморозка", amount=STARS_FREEZE_1)],
+        provider_token="",
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "buy_freeze_3")
+async def buy_freeze_3(callback: CallbackQuery, bot: Bot):
+    await callback.message.delete()
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title="3 заморозки",
+        description="Запас защиты — три заморозки по выгодной цене",
+        payload="freeze_3",
+        currency="XTR",
+        prices=[LabeledPrice(label="3 заморозки", amount=STARS_FREEZE_3)],
+        provider_token="",
+    )
+    await callback.answer()
+
+@router.message(F.successful_payment)
+async def payment_done(message: Message):
+    payload = message.successful_payment.invoice_payload
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )).scalar_one()
+
+        if payload == "custom_unlimited":
+            u.premium_customs = True
+            await session.commit()
+            return await message.answer(
+                "⭐️ <b>оплачено, спасибо!</b>\n\n"
+                "теперь можешь создавать сколько угодно своих челленджей 🚀",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu_keyboard()
+            )
+        elif payload == "freeze_1":
+            u.freeze_count += 1
+            await session.commit()
+            return await message.answer(
+                f"🧊 <b>+1 заморозка!</b> теперь их у тебя: {u.freeze_count}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu_keyboard()
+            )
+        elif payload == "freeze_3":
+            u.freeze_count += 3
+            await session.commit()
+            return await message.answer(
+                f"🧊🧊🧊 <b>+3 заморозки!</b> теперь их у тебя: {u.freeze_count}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu_keyboard()
+            )
 
 @router.message(StateFilter(ChallengeState.waiting_for_custom_name))
 async def process_custom_name(message: Message, state: FSMContext):
@@ -452,6 +856,112 @@ async def process_custom_name(message: Message, state: FSMContext):
         parse_mode=ParseMode.HTML
     )
     await state.set_state(ChallengeState.setting_start_date)
+
+@router.callback_query(F.data == "new_partner")
+async def new_partner_start(callback: CallbackQuery):
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )).scalar_one()
+        if not u.premium_customs:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"⭐️ разблокировать за {STARS_CUSTOM_PRICE} ⭐️", callback_data="buy_custom_unlimited")],
+                [InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")]
+            ])
+            return await callback.message.edit_text(
+                "👥 <b>парный челлендж — про-функция</b>\n\n"
+                "позови друга и держите общий стрик вместе.\n"
+                f"доступно после покупки премиума за <b>{STARS_CUSTOM_PRICE} ⭐️</b>",
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
+            )
+    kb_buttons = [
+        [InlineKeyboardButton(text=v, callback_data=f"partner_{k}")]
+        for k, v in CHALLENGE_NAMES.items()
+    ]
+    kb_buttons.append([InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")])
+    await callback.message.edit_text(
+        "👥 <b>парный челлендж</b>\n\nкакой челлендж делаете вместе?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("partner_") & ~F.data.startswith("partner_accept_"))
+async def create_partner_challenge(callback: CallbackQuery, bot: Bot):
+    ctype = callback.data.replace("partner_", "")
+    if ctype not in CHALLENGE_NAMES:
+        return await callback.answer("неизвестный тип", show_alert=True)
+
+    token = secrets.token_hex(8)
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )).scalar_one()
+        c = Challenge(user_id=u.id, challenge_type=ctype, start_date=date.today())
+        session.add(c)
+        await session.flush()
+        session.add(PartnerInvite(token=token, challenge_id=c.id, created_at=date.today()))
+        await session.commit()
+
+    me = await bot.get_me()
+    invite_link = f"https://t.me/{me.username}?start=join_{token}"
+    name = CHALLENGE_NAMES[ctype]
+    await callback.message.edit_text(
+        f"👥 <b>парный челлендж создан: {name}</b>\n\n"
+        f"отправь другу эту ссылку:\n{invite_link}\n\n"
+        "как только он примет — у вас начнётся общий стрик 🔥",
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("partner_accept_"))
+async def accept_partner_challenge(callback: CallbackQuery):
+    token = callback.data.replace("partner_accept_", "")
+    async with async_session_maker() as session:
+        invite = (await session.execute(
+            select(PartnerInvite).where(PartnerInvite.token == token)
+        )).scalar_one_or_none()
+        if not invite:
+            return await callback.answer("ссылка недействительна или уже использована", show_alert=True)
+
+        a_challenge = (await session.execute(
+            select(Challenge).where(Challenge.id == invite.challenge_id)
+        )).scalar_one_or_none()
+        if not a_challenge:
+            return await callback.answer("челлендж не найден", show_alert=True)
+
+        a_user = (await session.execute(
+            select(User).where(User.id == a_challenge.user_id)
+        )).scalar_one()
+        if a_user.telegram_id == callback.from_user.id:
+            return await callback.answer("нельзя принять свой же инвайт 😅", show_alert=True)
+
+        b_user = (await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )).scalar_one()
+        b_challenge = Challenge(
+            user_id=b_user.id,
+            challenge_type=a_challenge.challenge_type,
+            start_date=date.today(),
+            partner_challenge_id=a_challenge.id
+        )
+        session.add(b_challenge)
+        await session.flush()
+
+        a_challenge.partner_challenge_id = b_challenge.id
+        await session.delete(invite)
+        await session.commit()
+
+    name = CHALLENGE_NAMES.get(a_challenge.challenge_type, a_challenge.challenge_type)
+    partner_name = a_user.username or str(a_user.telegram_id)
+    await callback.message.edit_text(
+        f"🤝 <b>принято!</b>\n\n"
+        f"вы с @{partner_name} теперь делаете <b>{name}</b> вместе.\n"
+        "общий стрик начался — держитесь! 💪",
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("new_"))
 async def select_start_date_type(callback: CallbackQuery, state: FSMContext):
@@ -561,9 +1071,11 @@ async def _backfill_past_days(session, challenge_id: int, start_date: date) -> N
     await recalculate_streak(session, challenge_id)
     await session.commit()
 
-@router.callback_query(F.data == "m_up", StateFilter(ChallengeState.selecting_mode))
+@router.callback_query(F.data == "m_up")
 async def save_streak_mode(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    if not data.get("ctype"):
+        return await callback.answer("сессия устарела — начни создание челленджа заново", show_alert=True)
     start_date    = data["start_date"]
     type_to_save  = data.get("custom_name") if data["ctype"] == "custom" else data["ctype"]
     display_name  = data.get("custom_name") if data["ctype"] == "custom" else CHALLENGE_NAMES[data["ctype"]]
@@ -597,7 +1109,7 @@ async def save_streak_mode(callback: CallbackQuery, state: FSMContext):
         )
     await state.clear()
 
-@router.callback_query(F.data == "m_down", StateFilter(ChallengeState.selecting_mode))
+@router.callback_query(F.data == "m_down")
 async def mode_down_prompt(callback: CallbackQuery, state: FSMContext):
     kb_cancel = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")
@@ -744,13 +1256,21 @@ async def ed_process(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("save_"))
 async def save_status(callback: CallbackQuery):
-    #Сохраняет статус дня. При срыве (fail) — предлагает потратить заморозку. XP +10 начисляется только при первом success за день (не при повторном).
     _, cid, d_str, status = callback.data.split("_")
     d = datetime.strptime(d_str, "%d.%m.%Y").date()
+    is_unified = "честный чек на сегодня" in (callback.message.text or "")
+
+    # values captured inside session for use after it closes
+    c_type = None
     is_fin = False
+    do_unified_all_done = False
+    do_unified_update_kb = False
+    unified_new_kb = None
+    ai_text_for_unified = None
+    final_txt = None
+    final_img = None
 
     async with async_session_maker() as session:
-        # При срыве — предложить заморозку если она есть
         if status == DayStatus.fail:
             u = (await session.execute(
                 select(User).join(Challenge).where(Challenge.id == int(cid))
@@ -779,12 +1299,12 @@ async def save_status(callback: CallbackQuery):
         if day and day.status == status:
             return await callback.answer("уже записано")
 
-        # XP только если это новый success (не перезапись success→success)
+        xp_user = None
         if status == DayStatus.success and (not day or day.status != DayStatus.success):
-            u = (await session.execute(
+            xp_user = (await session.execute(
                 select(User).join(Challenge).where(Challenge.id == int(cid))
             )).scalar_one()
-            u.xp += 10
+            xp_user.xp += 10
 
         if not day:
             session.add(ChallengeDay(challenge_id=int(cid), date=d, status=status))
@@ -798,6 +1318,11 @@ async def save_status(callback: CallbackQuery):
         c = (await session.execute(
             select(Challenge).where(Challenge.id == int(cid))
         )).scalar_one()
+        c_type = c.challenge_type
+        # Keep partner's streak in sync
+        if c.partner_challenge_id:
+            await recalculate_streak(session, c.partner_challenge_id)
+            await session.commit()
 
         is_fin = bool(c.target_date and d == c.target_date and status == DayStatus.success)
         if is_fin:
@@ -806,20 +1331,76 @@ async def save_status(callback: CallbackQuery):
             await session.commit()
 
         if status == DayStatus.success:
-            await check_milestone(callback, new_streak, CHALLENGE_NAMES.get(c.challenge_type, ""), session)
+            await check_milestone(callback, new_streak, CHALLENGE_NAMES.get(c_type, ""), session)
+
+        if is_unified and not is_fin:
+            if xp_user is None:
+                xp_user = (await session.execute(
+                    select(User).join(Challenge).where(Challenge.id == int(cid))
+                )).scalar_one()
+
+            all_active = (await session.execute(
+                select(Challenge).where(and_(
+                    Challenge.user_id == xp_user.id,
+                    Challenge.status == ChallengeStatus.active
+                ))
+            )).scalars().all()
+
+            challenges_with_status = []
+            all_done = True
+            for ch in all_active:
+                day_rec = (await session.execute(
+                    select(ChallengeDay).where(and_(
+                        ChallengeDay.challenge_id == ch.id,
+                        ChallengeDay.date == d
+                    ))
+                )).scalar_one_or_none()
+                if day_rec is None:
+                    all_done = False
+                challenges_with_status.append((ch, day_rec.status if day_rec else None))
+
+            if all_done:
+                do_unified_all_done = True
+                ai_text_for_unified = await get_ai_motivation(
+                    f"выполнил все челленджи за день, XP: {xp_user.xp}, стрик: {new_streak} дней"
+                )
+            else:
+                do_unified_update_kb = True
+                unified_new_kb = build_unified_check_kb(challenges_with_status, d_str)
+
+    if do_unified_all_done:
+        await callback.message.edit_text(
+            f"✅ всё отмечено на сегодня!\n\n💡 {ai_text_for_unified}",
+            parse_mode=ParseMode.HTML
+        )
+        await callback.answer()
+        return
+
+    if do_unified_update_kb:
+        await callback.message.edit_reply_markup(reply_markup=unified_new_kb)
+        await callback.answer()
+        return
 
     if is_fin:
-        txt = f"🏆 <b>ПОЗДРАВЛЯЮ!</b> ты дошёл до цели!\n{CHALLENGE_NAMES.get(c.challenge_type, '')} завершён"
-        img = "media/success.jpg"
+        final_txt = f"🏆 <b>ПОЗДРАВЛЯЮ!</b> ты дошёл до цели!\n{CHALLENGE_NAMES.get(c_type, '')} завершён"
+        final_img = "media/success.jpg"
     elif status == DayStatus.success:
-        txt = "лучший! ещё один день в копилку твоей силы 🚀"
-        img = "media/success.jpg"
+        final_txt = random.choice([
+            "ещё один день в копилку 💪 так держать!",
+            "сделано. ты молодец, серьёзно 🚀",
+            "день засчитан. стрик растёт ✅",
+        ])
+        final_img = "media/success.jpg"
     else:
-        txt = "всё ровно, завтра — новый старт 🤝"
-        img = "media/reset.jpg"
+        final_txt = random.choice([
+            "ничего, завтра новый шанс 🤝",
+            "срыв — это не конец, это данные для анализа 🧠",
+            "все падают. важно — встать. завтра снова 💪",
+        ])
+        final_img = "media/reset.jpg"
 
     await callback.message.delete()
-    await send_with_image(callback, img, txt, reply_markup=main_menu_keyboard())
+    await send_with_image(callback, final_img, final_txt, reply_markup=main_menu_keyboard())
 
 @router.callback_query(F.data.startswith("frz_"))
 async def use_freeze(callback: CallbackQuery):
@@ -974,7 +1555,6 @@ async def close_kb(callback: CallbackQuery, state: FSMContext):
 # ==========================================
 
 async def daily_task(bot: Bot):
-    #Каждую минуту проверяет: у каких юзеров сейчас наступило время отчёта. Флаг last_notified_at сравнивается с локальной датой юзера (user_today), а не серверной — корректно работает для разных часовых поясов. Каждые 30 XP отправляется мотивирующий совет. CHALLENGE_NAMES.get() защищает от KeyError для кастомных челленджей.
     async with async_session_maker() as session:
         now = datetime.now(timezone.utc)
 
@@ -982,7 +1562,7 @@ async def daily_task(bot: Bot):
             select(User).where(User.utc_offset.is_not(None))
         )
         for u in res.scalars():
-            local_t   = now + timedelta(hours=u.utc_offset)
+            local_t    = now + timedelta(hours=u.utc_offset)
             user_today = local_t.date()
 
             if u.last_notified_at == user_today:
@@ -1002,39 +1582,45 @@ async def daily_task(bot: Bot):
             if not cs:
                 continue
 
-            # Мотивирующий совет каждые 30 XP
+            # AI-инсайт каждые 30 XP (вместо статичных TIPS)
             if u.xp > 0 and u.xp % 30 == 0:
                 try:
+                    tip = await get_ai_motivation(f"пользователь набрал {u.xp} XP в трекере привычек")
                     await bot.send_message(
                         u.telegram_id,
-                        f"💡 <b>инсайт дня:</b>\n{random.choice(TIPS)}",
+                        f"💡 <b>инсайт дня:</b>\n{tip}",
                         parse_mode=ParseMode.HTML
                     )
                 except Exception:
                     pass
 
+            # Собираем только незаполненные челленджи
+            d_str = user_today.strftime("%d.%m.%Y")
+            unchecked = []
             for c in cs:
-                # Не отправляем если день уже отмечен
-                day_check = await session.execute(
+                day_rec = (await session.execute(
                     select(ChallengeDay).where(and_(
                         ChallengeDay.challenge_id == c.id,
                         ChallengeDay.date == user_today
                     ))
-                )
-                if day_check.scalar_one_or_none():
-                    continue
-                # .get() — защита от KeyError для кастомных челленджей
-                display_name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+                )).scalar_one_or_none()
+                if not day_rec:
+                    unchecked.append(c)
+
+            if unchecked:
+                date_label = f"{user_today.day} {MONTH_NAMES_RU[user_today.month - 1]}"
+                challenges_with_status = [(c, None) for c in unchecked]
+                kb = build_unified_check_kb(challenges_with_status, d_str)
                 try:
                     await bot.send_message(
                         u.telegram_id,
-                        f"🔔 честный чек: <b>{display_name}</b>\nкак прошёл день?",
-                        reply_markup=get_status_kb(c.id, user_today.strftime("%d.%m.%Y")),
+                        f"🔔 честный чек на сегодня, {date_label}",
+                        reply_markup=kb,
                         disable_notification=u.silent_mode,
                         parse_mode=ParseMode.HTML
                     )
                 except Exception:
-                    continue
+                    pass
 
             u.last_notified_at = user_today
             await session.commit()
@@ -1077,14 +1663,126 @@ async def auto_skip_task():
                     await recalculate_streak(session, c.id)
                     await session.commit()
 
+async def motivation_task(bot: Bot):
+    # Среда (2) и пятница (4) в 12:00 по локальному времени — короткое AI-сообщение
+    MOTIVATION_DAYS = {2, 4}
+    async with async_session_maker() as session:
+        now_utc = datetime.now(timezone.utc)
+        res = await session.execute(select(User).where(User.utc_offset.is_not(None)))
+        for u in res.scalars():
+            local_t = now_utc + timedelta(hours=u.utc_offset)
+            if local_t.weekday() not in MOTIVATION_DAYS or local_t.hour != 12:
+                continue
+            user_today = local_t.date()
+            if u.last_motivation_at == user_today:
+                continue
+
+            # Контекст для AI: текущий стрик по активным челленджам
+            cs = (await session.execute(
+                select(Challenge).where(and_(
+                    Challenge.user_id == u.id,
+                    Challenge.status == ChallengeStatus.active
+                ))
+            )).scalars().all()
+            if not cs:
+                continue
+
+            max_streak = max((c.current_streak for c in cs), default=0)
+            day_name = "среда" if local_t.weekday() == 2 else "пятница"
+            context = (
+                f"{day_name}, середина недели в трекере привычек. "
+                f"лучший текущий стрик пользователя: {max_streak} дней подряд"
+            )
+            tip = await get_ai_motivation(context)
+
+            try:
+                await bot.send_message(
+                    u.telegram_id,
+                    f"💡 {tip}",
+                    parse_mode=ParseMode.HTML,
+                    disable_notification=u.silent_mode
+                )
+                u.last_motivation_at = user_today
+                await session.commit()
+            except Exception:
+                pass
+
+async def weekly_stats_task(bot: Bot):
+    async with async_session_maker() as session:
+        now_utc = datetime.now(timezone.utc)
+        res = await session.execute(select(User).where(User.utc_offset.is_not(None)))
+        for u in res.scalars():
+            local_t = now_utc + timedelta(hours=u.utc_offset)
+            # Понедельник в 10:00 по локальному времени
+            if local_t.weekday() != 0 or local_t.hour != 10:
+                continue
+            user_today = local_t.date()
+            if u.last_weekly_stats_at == user_today:
+                continue
+
+            report, _ = await build_stats_text(session, u)
+
+            # Считаем % побед за прошлую неделю для AI-комментария
+            week_start = user_today - timedelta(days=7)
+            week_stats = (await session.execute(
+                select(
+                    func.count(ChallengeDay.id).filter(ChallengeDay.status == DayStatus.success),
+                    func.count(ChallengeDay.id)
+                ).join(Challenge).where(and_(
+                    Challenge.user_id == u.id,
+                    ChallengeDay.date >= week_start,
+                    ChallengeDay.date < user_today
+                ))
+            )).fetchone()
+            week_success, week_total = week_stats
+            week_pct = int(week_success / max(1, week_total) * 100)
+
+            ai_text = await get_ai_motivation(
+                f"итоги недели: {week_pct}% побед из {week_total} возможных дней в трекере привычек"
+            )
+            full_report = f"📊 <b>итоги недели</b>\n\n{report}\n\n💡 {ai_text}"
+
+            try:
+                await bot.send_message(
+                    u.telegram_id,
+                    full_report,
+                    parse_mode=ParseMode.HTML,
+                    disable_notification=u.silent_mode
+                )
+                u.last_weekly_stats_at = user_today
+                await session.commit()
+            except Exception:
+                pass
+
 @router.message()
 async def fallback_echo(message: Message):
-    #Ловит всё что не попало в другие хендлеры
-    await message.answer(
-        "я тебя не совсем понял 🧐\n"
-        "нажми на кнопку или введи /cancel",
-        reply_markup=main_menu_keyboard()
+    if not message.text:
+        return await message.answer("нажми на кнопку или введи /cancel", reply_markup=main_menu_keyboard())
+
+    prompt = (
+        "Ты — дружелюбный ассистент Telegram-бота для трекинга привычек 'Just Never Do It'. "
+        "Бот умеет: создавать челленджи (без алкоголя, сахара, фастфуда, никотина, шортсов или свои), "
+        "отмечать дни (победа/срыв/пропуск), показывать статистику, редактировать историю, "
+        "использовать заморозки для сохранения стрика. "
+        "Пользователь написал что-то непонятное боту: «" + message.text + "». "
+        "Ответь коротко (1-2 предложения) по-русски: помоги разобраться что делать, "
+        "или мягко направь к нужной кнопке. Без лишних слов."
     )
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                GEMINI_URL,
+                params={"key": GEMINI_API_KEY},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"maxOutputTokens": 80, "temperature": 0.7}
+                }
+            )
+            reply = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception:
+        reply = "нажми на кнопку в меню или введи /cancel"
+
+    await message.answer(reply, reply_markup=main_menu_keyboard())
 
 # ==========================================
 # ЧАСТЬ 8: ЗАПУСК
@@ -1094,13 +1792,15 @@ async def main():
     await init_db()
     bot = Bot(token=BOT_TOKEN)
     dp  = Dispatcher(storage=MemoryStorage())
+    dp.message.middleware(EnsureUserMiddleware())
+    dp.callback_query.middleware(EnsureUserMiddleware())
     dp.include_router(router)
 
     scheduler = AsyncIOScheduler()
-    # Каждую минуту — отправка уведомлений тем у кого наступило время
-    scheduler.add_job(daily_task,     "interval", minutes=1, args=[bot])
-    # Каждую минуту — auto-skip для тех у кого наступила полночь
-    scheduler.add_job(auto_skip_task, "interval", minutes=1)
+    scheduler.add_job(daily_task,        "interval", minutes=1,  args=[bot])
+    scheduler.add_job(auto_skip_task,    "interval", minutes=1)
+    scheduler.add_job(weekly_stats_task, "interval", minutes=60, args=[bot])
+    scheduler.add_job(motivation_task,   "interval", minutes=60, args=[bot])
     scheduler.start()
 
     await set_main_menu(bot)

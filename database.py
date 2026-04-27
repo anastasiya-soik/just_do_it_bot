@@ -19,3 +19,11 @@ async_session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expir
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Manual migrations for columns added after initial deploy
+        for sql in [
+            "ALTER TABLE challenges ADD COLUMN partner_challenge_id INTEGER REFERENCES challenges(id) ON DELETE SET NULL",
+        ]:
+            try:
+                await conn.exec_driver_sql(sql)
+            except Exception:
+                pass  # column already exists
