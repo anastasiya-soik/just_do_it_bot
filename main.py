@@ -34,7 +34,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SENTRY_DSN = os.getenv("SENTRY_DSN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
 STARS_CUSTOM_PRICE = 100
 STARS_FREEZE_1     = 15
 STARS_FREEZE_3     = 30
