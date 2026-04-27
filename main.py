@@ -905,6 +905,7 @@ async def new_partner_start(callback: CallbackQuery):
         [InlineKeyboardButton(text=v, callback_data=f"partner_{k}")]
         for k, v in CHALLENGE_NAMES.items()
     ]
+    kb_buttons.append([InlineKeyboardButton(text="✍️ свой челлендж", callback_data="partner_custom")])
     kb_buttons.append([InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")])
     await callback.message.edit_text(
         "👥 <b>парный челлендж</b>\n\nкакой челлендж делаете вместе?",
@@ -913,7 +914,52 @@ async def new_partner_start(callback: CallbackQuery):
     )
     await callback.answer()
 
-@router.callback_query(F.data.startswith("partner_") & ~F.data.startswith("partner_accept_"))
+@router.callback_query(F.data == "partner_custom")
+async def partner_custom_name_prompt(callback: CallbackQuery, state: FSMContext):
+    kb_cancel = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")
+    ]])
+    await callback.message.edit_text(
+        "как назовём ваш совместный челлендж?\nкоротко, до 30 символов:",
+        reply_markup=kb_cancel
+    )
+    await state.set_state(ChallengeState.waiting_for_partner_custom_name)
+    await callback.answer()
+
+@router.message(StateFilter(ChallengeState.waiting_for_partner_custom_name))
+async def process_partner_custom_name(message: Message, state: FSMContext, bot: Bot):
+    if message.text.lower() in ["отмена", "назад"]:
+        await state.clear()
+        return await message.answer("отменено", reply_markup=main_menu_keyboard())
+    name = message.text.strip()
+    if not name:
+        return await message.answer("название не может быть пустым:")
+    if len(name) > 30:
+        return await message.answer("слишком длинное — напиши до 30 символов:")
+
+    token = secrets.token_hex(8)
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )).scalar_one()
+        c = Challenge(user_id=u.id, challenge_type=name, start_date=date.today())
+        session.add(c)
+        await session.flush()
+        session.add(PartnerInvite(token=token, challenge_id=c.id, created_at=date.today()))
+        await session.commit()
+
+    me = await bot.get_me()
+    invite_link = f"https://t.me/{me.username}?start=join_{token}"
+    await state.clear()
+    await message.answer(
+        f"👥 <b>парный челлендж создан: {name}</b>\n\n"
+        f"отправь другу эту ссылку:\n{invite_link}\n\n"
+        "как только он примет — у вас начнётся общий стрик 🔥",
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_menu_keyboard()
+    )
+
+@router.callback_query(F.data.startswith("partner_") & ~F.data.startswith("partner_accept_") & ~F.data.startswith("partner_custom"))
 async def create_partner_challenge(callback: CallbackQuery, bot: Bot):
     ctype = callback.data.replace("partner_", "")
     if ctype not in CHALLENGE_NAMES:
