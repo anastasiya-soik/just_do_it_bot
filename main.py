@@ -399,9 +399,12 @@ async def cmd_help(message: Message):
 
         "📊 статистика за неделю приходит автоматически каждый понедельник в 10:00\n"
         "💡 мотивация — по средам и пятницам в 12:00\n\n"
-        "/cancel — отменить любое действие",
+        "/cancel — отменить любое действие\n"
+        "/faq — частые вопросы и советы по мотивации",
         parse_mode=ParseMode.HTML,
-        reply_markup=main_menu_keyboard()
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❓ частые вопросы", callback_data="faq_back")]
+        ])
     )
 
 @router.message(Command("broadcast"))
@@ -1826,19 +1829,106 @@ async def weekly_stats_task(bot: Bot):
             except Exception:
                 pass
 
+@router.message(Command("faq"))
+async def cmd_faq(message: Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="😔 нет мотивации продолжать",    callback_data="faq_motivation")],
+        [InlineKeyboardButton(text="🧊 как работают заморозки?",     callback_data="faq_freeze")],
+        [InlineKeyboardButton(text="📝 можно поправить прошлый день?", callback_data="faq_edit")],
+        [InlineKeyboardButton(text="👥 что такое парный челлендж?",   callback_data="faq_partner")],
+        [InlineKeyboardButton(text="⭐️ за что платить звёздочки?",   callback_data="faq_stars")],
+        [InlineKeyboardButton(text="❌ закрыть",                      callback_data="close_settings")],
+    ])
+    await message.answer("❓ <b>частые вопросы</b>\n\nвыбери что интересует:", reply_markup=kb, parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data.startswith("faq_"))
+async def faq_answer(callback: CallbackQuery):
+    topic = callback.data.replace("faq_", "")
+    kb_back = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="← назад к вопросам", callback_data="faq_back")],
+    ])
+    answers = {
+        "motivation": (
+            "😔 <b>нет мотивации — это нормально</b>\n\n"
+            "мотивация приходит и уходит, а привычка — это система.\n\n"
+            "попробуй:\n"
+            "• сократить челлендж до минимума — просто отметь сегодняшний день\n"
+            "• вспомни зачем начал — запиши это прямо сейчас\n"
+            "• посмотри свой стрик в «📊 мой прогресс» — жалко терять?\n\n"
+            "если совсем тяжело — используй 🧊 заморозку, стрик сохранится"
+        ),
+        "freeze": (
+            "🧊 <b>заморозки</b>\n\n"
+            "когда нажимаешь 😵 срыв — бот предложит потратить заморозку.\n"
+            "день засчитается как «пропуск» и стрик не сбросится.\n\n"
+            "заморозки копятся автоматически за стрики:\n"
+            "7 / 14 / 30 / 60 / 100 дней\n\n"
+            "закончились — купи в ⚙️ настройках:\n"
+            "1 шт за 15 ⭐️ или 3 шт за 30 ⭐️"
+        ),
+        "edit": (
+            "📝 <b>поправить прошлый день</b>\n\n"
+            "да, можно — нажми «📝 поправить день» в меню.\n"
+            "выбери челлендж → введи дату (ДД.ММ.ГГГГ) → выбери новый статус.\n\n"
+            "стрик пересчитается автоматически."
+        ),
+        "partner": (
+            "👥 <b>парный челлендж</b>\n\n"
+            "общий стрик с другом — держитесь вместе.\n\n"
+            "как работает:\n"
+            "• создаёшь парный челлендж в «🎯 новый челлендж»\n"
+            "• получаешь ссылку-инвайт и отправляешь другу\n"
+            "• друг принимает — стрик запускается для обоих\n\n"
+            "важно: день засчитывается только если <b>оба</b> отметились.\n"
+            "если один из вас не отметил — стрик сбрасывается у обоих.\n\n"
+            "доступно с премиумом (100 ⭐️)"
+        ),
+        "stars": (
+            "⭐️ <b>за что платить звёздочки</b>\n\n"
+            "<b>100 ⭐️ — премиум навсегда:</b>\n"
+            "• безлимитные кастомные челленджи\n"
+            "• парные челленджи с друзьями\n\n"
+            "<b>15 ⭐️ — 1 заморозка</b>\n"
+            "<b>30 ⭐️ — 3 заморозки</b>\n\n"
+            "купить можно в ⚙️ настройках"
+        ),
+    }
+    if topic == "back":
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="😔 нет мотивации продолжать",    callback_data="faq_motivation")],
+            [InlineKeyboardButton(text="🧊 как работают заморозки?",     callback_data="faq_freeze")],
+            [InlineKeyboardButton(text="📝 можно поправить прошлый день?", callback_data="faq_edit")],
+            [InlineKeyboardButton(text="👥 что такое парный челлендж?",   callback_data="faq_partner")],
+            [InlineKeyboardButton(text="⭐️ за что платить звёздочки?",   callback_data="faq_stars")],
+            [InlineKeyboardButton(text="❌ закрыть",                      callback_data="close_settings")],
+        ])
+        await callback.message.edit_text("❓ <b>частые вопросы</b>\n\nвыбери что интересует:", reply_markup=kb, parse_mode=ParseMode.HTML)
+        return await callback.answer()
+
+    text = answers.get(topic)
+    if not text:
+        return await callback.answer()
+    await callback.message.edit_text(text, reply_markup=kb_back, parse_mode=ParseMode.HTML)
+    await callback.answer()
+
 @router.message()
 async def fallback_echo(message: Message):
     if not message.text:
         return await message.answer("нажми на кнопку или введи /cancel", reply_markup=main_menu_keyboard())
 
     prompt = (
-        "Ты — дружелюбный ассистент Telegram-бота для трекинга привычек 'Just Never Do It'. "
-        "Бот умеет: создавать челленджи (без алкоголя, сахара, фастфуда, никотина, шортсов или свои), "
-        "отмечать дни (победа/срыв/пропуск), показывать статистику, редактировать историю, "
-        "использовать заморозки для сохранения стрика. "
-        "Пользователь написал что-то непонятное боту: «" + message.text + "». "
-        "Ответь коротко (1-2 предложения) по-русски: помоги разобраться что делать, "
-        "или мягко направь к нужной кнопке. Без лишних слов."
+        "Ты — ассистент Telegram-бота 'Just Never Do It' для трекинга вредных привычек. "
+        "Кнопки в боте (используй только эти названия, никакие другие): "
+        "«📊 мой прогресс», «🎯 новый челлендж», «📝 поправить день», «⚙️ настройки». "
+        "Команды: /help — гайд, /faq — частые вопросы, /cancel — отмена. "
+        "Бот умеет: создавать челленджи (алкоголь, сахар, фастфуд, никотин, шортсы или свой), "
+        "отмечать дни (✅ победа / 😵 срыв / ⏭ пропуск), показывать статистику, "
+        "редактировать историю, использовать 🧊 заморозки для сохранения стрика. "
+        "Пользователь написал: «" + message.text + "». "
+        "Ответь коротко (1-2 предложения) по-русски. "
+        "Если жалуется на отсутствие мотивации или усталость — поддержи и скажи про /faq. "
+        "Если спрашивает как пользоваться — направь на /help. "
+        "Не придумывай несуществующие кнопки."
     )
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
@@ -1852,7 +1942,7 @@ async def fallback_echo(message: Message):
             )
             reply = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception:
-        reply = "нажми на кнопку в меню или введи /cancel"
+        reply = "нажми на кнопку в меню или напиши /faq — там есть ответы на частые вопросы"
 
     await message.answer(reply, reply_markup=main_menu_keyboard())
 
