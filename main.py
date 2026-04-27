@@ -315,8 +315,17 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
             days_in = max(1, (date.today() - c.start_date).days + 1)
             heatmap = await get_heatmap(session, c.id)
             name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+            partner_label = ""
+            if c.partner_challenge_id:
+                partner = (await session.execute(
+                    select(User)
+                    .join(Challenge, Challenge.user_id == User.id)
+                    .where(Challenge.id == c.partner_challenge_id)
+                )).scalar_one_or_none()
+                partner_name = f"@{partner.username}" if partner and partner.username else "друг"
+                partner_label = f" 👥 с {partner_name}"
 
-            report += f"\n{name}\n"
+            report += f"\n{name}{partner_label}\n"
             report += f"— {c.current_streak} {plural_days(c.current_streak)} подряд\n"
             report += f"— рекорд {c.longest_streak} {plural_days(c.longest_streak)}\n"
             report += f"— {success_count} побед, {fail_count} срывов\n"
