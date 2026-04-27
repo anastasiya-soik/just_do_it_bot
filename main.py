@@ -107,16 +107,34 @@ def plural_days(n: int) -> str:
 # ЧАСТЬ 1: УТИЛИТЫ И БИЗНЕС-ЛОГИКА
 # ==========================================
 
+RANKS = [
+    (0,   "🥚 только вылупился",          "xp 0–49"),
+    (50,  "🌱 что-то начинается",          "xp 50–199"),
+    (200, "😤 серьёзный человек",          "xp 200–499"),
+    (500, "🔥 машина без срывов",          "xp 500–999"),
+    (1000,"💀 страшный сон вредных привычек", "xp 1000+"),
+]
+
 def get_user_rank(xp: int) -> str:
-    if xp < 50:  return "новичок 🌱"
-    if xp < 200: return "стоик 🧱"
-    if xp < 500: return "мастер контроля 💎"
-    return "легенда дисциплины 👑"
+    label = RANKS[0][1]
+    for threshold, name, _ in RANKS:
+        if xp >= threshold:
+            label = name
+    next_rank = None
+    for threshold, name, _ in RANKS:
+        if xp < threshold:
+            next_rank = (threshold, name)
+            break
+    rank_line = f"<b>{label}</b>  ·  {xp} xp"
+    if next_rank:
+        rank_line += f"  →  до «{next_rank[1]}»: {next_rank[0] - xp} xp"
+    return rank_line
 
 def get_progress_bar(percent: int) -> str:
-    length = 8
-    filled = int(length * max(0, min(100, percent)) / 100)
-    return "●" * filled + "○" * (length - filled)
+    p = max(0, min(100, percent))
+    filled = int(8 * p / 100)
+    bar = "█" * filled + "░" * (8 - filled)
+    return f"{bar} {p}%"
 
 async def get_heatmap(session, challenge_id: int) -> str:
     #Последние 7 дней в виде эмодзи-строки
@@ -294,7 +312,7 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
         ))
     )).scalars().all()
 
-    report = f"{get_user_rank(user.xp)}\n"
+    report = f"{get_user_rank(user.xp)}\n\n"
     kb_delete = InlineKeyboardMarkup(inline_keyboard=[])
 
     if not challenges:
@@ -334,7 +352,7 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
             if c.target_date:
                 full_dist = max(1, (c.target_date - c.start_date).days)
                 pct = min(100, max(0, int((date.today() - c.start_date).days / full_dist * 100)))
-                report += f"— до финиша: {get_progress_bar(pct)} {pct}%\n"
+                report += f"— до финиша: {get_progress_bar(pct)}\n"
 
             kb_delete.inline_keyboard.append([
                 InlineKeyboardButton(text=f"🗑 отменить {name}", callback_data=f"drop_{c.id}")
