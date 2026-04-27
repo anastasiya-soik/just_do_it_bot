@@ -301,7 +301,7 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
         report += (
             "\n\nпока пусто 👀\n\n"
             "запусти первый челлендж — и я начну считать твои победы.\n"
-            "жми <b>➕ новый челлендж</b> в меню"
+            "жми <b>🎯 новый челлендж</b> в меню"
         )
     else:
         for c in challenges:
@@ -369,7 +369,7 @@ async def cmd_help(message: Message):
     await message.answer(
         "📖 <b>как пользоваться ботом</b>\n\n"
 
-        "<b>➕ новый челлендж</b>\n"
+        "<b>🎯 новый челлендж</b>\n"
         "выбери готовую привычку или создай свою.\n"
         "укажи дату старта и режим:\n"
         "• <b>стрик</b> — бьёшь личный рекорд дней подряд\n"

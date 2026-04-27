@@ -6,7 +6,7 @@ from aiogram.types import (
 from models import DayStatus
 
 BTN_MY_CHALLENGES = "📊 мой прогресс"
-BTN_NEW_CHALLENGE  = "➕ новый челлендж"
+BTN_NEW_CHALLENGE  = "🎯 новый челлендж"
 BTN_EDIT_HISTORY   = "📝 поправить день"
 BTN_SETTINGS       = "⚙️ настройки"
 
