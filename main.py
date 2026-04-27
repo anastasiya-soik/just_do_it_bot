@@ -250,6 +250,16 @@ def get_status_kb(c_id: int, d_str: str) -> InlineKeyboardMarkup:
 MONTH_NAMES_RU = ["января","февраля","марта","апреля","мая","июня",
                   "июля","августа","сентября","октября","ноября","декабря"]
 
+def quick_kb(*buttons: tuple[str, str]) -> InlineKeyboardMarkup:
+    """Быстрая сборка inline-клавиатуры: quick_kb(("текст", "callback"), ...)"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t, callback_data=c)] for t, c in buttons
+    ])
+
+KB_AFTER_DAY   = quick_kb(("📊 мой прогресс", "quick_stats"), ("🎯 ещё челлендж", "quick_new"))
+KB_AFTER_START = quick_kb(("📊 мой прогресс", "quick_stats"), ("📝 поправить день", "quick_edit"))
+KB_WELCOME     = quick_kb(("📊 мой прогресс", "quick_stats"), ("🎯 новый челлендж", "quick_new"), ("❓ faq", "faq_back"))
+
 async def get_ai_motivation(context: str) -> str:
     if not GEMINI_API_KEY:
         return random.choice(TIPS)
