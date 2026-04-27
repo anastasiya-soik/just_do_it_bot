@@ -1911,24 +1911,48 @@ async def faq_answer(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=kb_back, parse_mode=ParseMode.HTML)
     await callback.answer()
 
+# rate limit: 5 сообщений в минуту на пользователя
+from collections import defaultdict
+_fallback_timestamps: dict[int, list] = defaultdict(list)
+
+FALLBACK_RATE_LIMIT = 5      # сообщений
+FALLBACK_RATE_WINDOW = 60    # секунд
+
+FALLBACK_LIMIT_REPLIES = [
+    "окей окей, полегче 😅 подожди минутку и пиши снова",
+    "ты меня заспамишь так 😵 минуту передышки — и продолжим",
+    "стоп, я не успеваю думать 🤯 минута тишины и я твой",
+]
+
 @router.message()
 async def fallback_echo(message: Message):
     if not message.text:
         return await message.answer("нажми на кнопку или введи /cancel", reply_markup=main_menu_keyboard())
 
+    # Rate limiting
+    uid = message.from_user.id
+    now = datetime.now(timezone.utc).timestamp()
+    _fallback_timestamps[uid] = [t for t in _fallback_timestamps[uid] if now - t < FALLBACK_RATE_WINDOW]
+    if len(_fallback_timestamps[uid]) >= FALLBACK_RATE_LIMIT:
+        return await message.answer(random.choice(FALLBACK_LIMIT_REPLIES))
+    _fallback_timestamps[uid].append(now)
+
+    user_text = message.text
     prompt = (
-        "Ты — ассистент Telegram-бота 'Just Never Do It' для трекинга вредных привычек. "
-        "Кнопки в боте (используй только эти названия, никакие другие): "
+        "ты — дерзкий, остроумный ассистент Telegram-бота 'Just Never Do It' для трекинга вредных привычек. "
+        "всегда пишешь с маленькой буквы, коротко, живо, иногда с лёгким юмором. "
+        "подстраиваешься под стиль пользователя: если он пишет неформально — ты тоже, если серьёзно — чуть серьёзнее. "
+        "кнопки в боте (используй только эти названия): "
         "«📊 мой прогресс», «🎯 новый челлендж», «📝 поправить день», «⚙️ настройки». "
-        "Команды: /help — гайд, /faq — частые вопросы, /cancel — отмена. "
-        "Бот умеет: создавать челленджи (алкоголь, сахар, фастфуд, никотин, шортсы или свой), "
-        "отмечать дни (✅ победа / 😵 срыв / ⏭ пропуск), показывать статистику, "
+        "команды: /help — гайд, /faq — частые вопросы, /cancel — отмена. "
+        "бот умеет: создавать челленджи (алкоголь, сахар, фастфуд, никотин, шортсы или свой), "
+        "отмечать дни (✅ победа / 😵 срыв / ⏭ пропуск), считать стрики, "
         "редактировать историю, использовать 🧊 заморозки для сохранения стрика. "
-        "Пользователь написал: «" + message.text + "». "
-        "Ответь коротко (1-2 предложения) по-русски. "
-        "Если жалуется на отсутствие мотивации или усталость — поддержи и скажи про /faq. "
-        "Если спрашивает как пользоваться — направь на /help. "
-        "Не придумывай несуществующие кнопки."
+        f"пользователь написал: «{user_text}». "
+        "ответь 1-2 предложения по-русски. "
+        "если жалуется на мотивацию или лень — поддержи с юмором и намекни на /faq. "
+        "если спрашивает как пользоваться — /help. "
+        "не придумывай несуществующие кнопки и команды."
     )
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
@@ -1937,12 +1961,12 @@ async def fallback_echo(message: Message):
                 params={"key": GEMINI_API_KEY},
                 json={
                     "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 80, "temperature": 0.7}
+                    "generationConfig": {"maxOutputTokens": 100, "temperature": 0.95}
                 }
             )
             reply = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception:
-        reply = "нажми на кнопку в меню или напиши /faq — там есть ответы на частые вопросы"
+        reply = "что-то пошло не так у меня в голове 🤯 попробуй /faq или нажми на кнопку в меню"
 
     await message.answer(reply, reply_markup=main_menu_keyboard())
 
