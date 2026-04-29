@@ -6,7 +6,11 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 # Patch env/bot imports before importing main
-with patch.dict(os.environ, {"BOT_TOKEN": "123:fake", "DATA_DIR": "/tmp/test_bot_data"}):
+with patch.dict(os.environ, {
+    "BOT_TOKEN": "123:fake",
+    "DATABASE_URL": "postgresql://fake:fake@localhost/fake",
+    "REDIS_URL": "redis://localhost:6379",
+}):
     with patch("aiogram.Bot.__init__", return_value=None):
         with patch("database.engine", MagicMock()):
             with patch("database.async_session_maker", MagicMock()):
