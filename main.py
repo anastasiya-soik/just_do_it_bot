@@ -1576,7 +1576,8 @@ async def open_settings(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "set_tz_prompt")
 async def tz_prompt_call(callback: CallbackQuery, state: FSMContext):
-    #Смена часового пояса из настроек — тот же флоу что и в онбординге
+    if await state.get_state() == ChallengeState.waiting_for_time:
+        return await callback.answer("уже жду — напиши текущий час цифрой")
     kb_cancel = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")
     ]])
@@ -1591,6 +1592,8 @@ async def tz_prompt_call(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "set_time_prompt")
 async def set_time_call(callback: CallbackQuery, state: FSMContext):
+    if await state.get_state() == ChallengeState.setting_report_time:
+        return await callback.answer("уже жду время — просто напиши ЧЧ:ММ")
     kb_cancel = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")
     ]])
@@ -1941,6 +1944,7 @@ async def faq_answer(callback: CallbackQuery):
 # rate limit: 5 сообщений в минуту на пользователя
 from collections import defaultdict
 _fallback_timestamps: dict[int, list] = defaultdict(list)
+_fallback_seen_ids: set[int] = set()  # дедупликация по message_id
 
 FALLBACK_RATE_LIMIT = 5      # сообщений
 FALLBACK_RATE_WINDOW = 60    # секунд
@@ -1956,7 +1960,14 @@ async def fallback_echo(message: Message):
     if not message.text:
         return await message.answer("нажми на кнопку или введи /cancel", reply_markup=main_menu_keyboard())
 
-    # Rate limiting
+    # дедупликация — одно сообщение обрабатывается ровно один раз
+    if message.message_id in _fallback_seen_ids:
+        return
+    _fallback_seen_ids.add(message.message_id)
+    if len(_fallback_seen_ids) > 1000:
+        _fallback_seen_ids.clear()
+
+    # rate limit: 5 сообщений в минуту на пользователя
     uid = message.from_user.id
     now = datetime.now(timezone.utc).timestamp()
     _fallback_timestamps[uid] = [t for t in _fallback_timestamps[uid] if now - t < FALLBACK_RATE_WINDOW]
