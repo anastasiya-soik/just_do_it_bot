@@ -14,7 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardButton,
-    InlineKeyboardMarkup, BotCommand, FSInputFile, ErrorEvent, ReplyKeyboardRemove,
+    InlineKeyboardMarkup, FSInputFile, ErrorEvent,
     LabeledPrice, PreCheckoutQuery
 )
 from sqlalchemy import select, and_, update, func
@@ -45,12 +45,13 @@ AI_SYSTEM_PROMPT = (
     "Длина ответа — 1-2 предложения максимум."
 )
 
-# Очередь AI-запросов — не более 1 запроса в 0.5с, защита от спама к Gemini
-_ai_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
 STARS_CUSTOM_PRICE = 100
 STARS_FREEZE_1     = 15
 STARS_FREEZE_3     = 30
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+# Очередь AI-запросов — не более 1 запроса в 0.5с, защита от спама к Gemini
+_ai_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
 
 # --- МОНИТОРИНГ ---
 if SENTRY_DSN:
@@ -68,13 +69,9 @@ router = Router()
 class EnsureUserMiddleware(BaseMiddleware):
     """Авто-создаёт юзера при первом контакте, чтобы scalar_one() не падал."""
     async def __call__(self, handler, event, data):
-        from aiogram.types import Message, CallbackQuery
-        obj = event
         tg_user = None
-        if isinstance(obj, Message):
-            tg_user = obj.from_user
-        elif isinstance(obj, CallbackQuery):
-            tg_user = obj.from_user
+        if isinstance(event, (Message, CallbackQuery)):
+            tg_user = event.from_user
         if tg_user:
             async with async_session_maker() as session:
                 exists = (await session.execute(
@@ -149,7 +146,6 @@ def get_progress_bar(percent: int) -> str:
     return f"{bar} {p}%"
 
 async def get_heatmap(session, challenge_id: int) -> str:
-    #Последние 7 дней в виде эмодзи-строки
     res = await session.execute(
         select(ChallengeDay)
         .where(ChallengeDay.challenge_id == challenge_id)
@@ -209,7 +205,6 @@ async def recalculate_streak(session, challenge_id: int) -> int:
     return current_streak
 
 async def check_milestone(event, streak: int, c_name: str, session=None) -> None:
-    #Поздравляет при достижении ключевых дней.
     milestones = {
         7:   "неделя! ты в огне 🔥",
         14:  "две недели! так держать 💪",
@@ -240,7 +235,6 @@ async def check_milestone(event, streak: int, c_name: str, session=None) -> None
     await target.answer(text, parse_mode=ParseMode.HTML)
 
 async def send_with_image(event, image_path: str, caption: str, reply_markup=None):
-    #Отправляет фото если файл есть, иначе текстом
     target = event.message if isinstance(event, CallbackQuery) else event
     if os.path.exists(image_path):
         return await target.answer_photo(
@@ -1394,10 +1388,10 @@ async def save_status(callback: CallbackQuery):
 
     c_type = None
     is_fin = False
-    new_streak = 0
     freeze_count = None
 
     async with async_session_maker() as session:
+        new_streak = 0
         res_d = await session.execute(
             select(ChallengeDay).where(and_(
                 ChallengeDay.challenge_id == int(cid),
@@ -1501,7 +1495,6 @@ async def save_status(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("frz_"))
 async def use_freeze(callback: CallbackQuery):
-    #Тратит заморозку: записывает skip вместо fail, стрик сохраняется
     _, cid, d_str = callback.data.split("_")
     d = datetime.strptime(d_str, "%d.%m.%Y").date()
     async with async_session_maker() as session:
