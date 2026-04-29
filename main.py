@@ -1142,10 +1142,12 @@ async def select_start_date_type(callback: CallbackQuery, state: FSMContext):
         reply_markup=start_date_keyboard(),
         parse_mode=ParseMode.HTML
     )
+    await callback.answer()
 
 @router.callback_query(F.data == "start_today")
 async def start_today_flow(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(start_date=date.today())
+    await state.update_data(start_date=date.today().isoformat())
+    await callback.answer()
     await ask_for_mode(callback, state)
 
 @router.callback_query(F.data == "start_custom")
@@ -1159,6 +1161,7 @@ async def start_custom_flow(callback: CallbackQuery, state: FSMContext):
         reply_markup=kb_back
     )
     await state.set_state(ChallengeState.setting_start_date)
+    await callback.answer()
 
 @router.message(StateFilter(ChallengeState.setting_start_date))
 async def process_custom_start_date(message: Message, state: FSMContext):
@@ -1169,7 +1172,7 @@ async def process_custom_start_date(message: Message, state: FSMContext):
         s_date = datetime.strptime(message.text.strip(), "%d.%m.%Y").date()
         if s_date > date.today():
             return await message.answer("дата старта не может быть в будущем")
-        await state.update_data(start_date=s_date)
+        await state.update_data(start_date=s_date.isoformat())
         await ask_for_mode(message, state)
     except ValueError:
         await message.answer(
@@ -1229,7 +1232,7 @@ async def save_streak_mode(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     if not data.get("ctype"):
         return await callback.answer("сессия устарела — начни создание челленджа заново", show_alert=True)
-    start_date    = data["start_date"]
+    start_date    = date.fromisoformat(data["start_date"])
     type_to_save  = data.get("custom_name") if data["ctype"] == "custom" else data["ctype"]
     display_name  = data.get("custom_name") if data["ctype"] == "custom" else CHALLENGE_NAMES[data["ctype"]]
     is_historical = start_date < date.today()
@@ -1282,7 +1285,7 @@ async def save_deadline_mode(message: Message, state: FSMContext):
     try:
         t_date = datetime.strptime(message.text.strip(), "%d.%m.%Y").date()
         data   = await state.get_data()
-        start_date = data["start_date"]
+        start_date = date.fromisoformat(data["start_date"])
 
         if t_date <= date.today():
             return await message.answer(
