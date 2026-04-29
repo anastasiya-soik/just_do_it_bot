@@ -52,15 +52,23 @@ def onboarding_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📖 как это работает", callback_data="onboarding_guide")],
     ])
 
-async def set_main_menu(bot: Bot) -> None:
-    await bot.set_my_commands([
-        BotCommand(command="/start",       description="меню"),
-        BotCommand(command="/help",        description="как пользоваться"),
-        BotCommand(command="/faq",         description="частые вопросы"),
-        BotCommand(command="/cancel",      description="отмена"),
-        BotCommand(command="/broadcast",    description="рассылка (админ)"),
-        BotCommand(command="/stats_admin",  description="статистика (админ)"),
-        BotCommand(command="/premium_on",   description="выдать премиум (админ)"),
-        BotCommand(command="/premium_off",  description="снять премиум (админ)"),
-        BotCommand(command="/premium_list", description="список премиум (админ)"),
-    ])
+async def set_main_menu(bot: Bot, admin_id: int = 0) -> None:
+    from aiogram.types import BotCommandScopeDefault, BotCommandScopeChat
+
+    user_commands = [
+        BotCommand(command="/start",  description="меню"),
+        BotCommand(command="/help",   description="как пользоваться"),
+        BotCommand(command="/faq",    description="частые вопросы"),
+        BotCommand(command="/cancel", description="отмена"),
+    ]
+    admin_commands = user_commands + [
+        BotCommand(command="/broadcast",    description="рассылка"),
+        BotCommand(command="/stats_admin",  description="статистика"),
+        BotCommand(command="/premium_on",   description="выдать премиум"),
+        BotCommand(command="/premium_off",  description="снять премиум"),
+        BotCommand(command="/premium_list", description="список премиум"),
+    ]
+
+    await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+    if admin_id:
+        await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))

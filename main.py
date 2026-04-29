@@ -466,7 +466,7 @@ async def cmd_broadcast(message: Message, state: FSMContext):
     user_count = 0
     async with async_session_maker() as session:
         user_count = (await session.execute(
-            select(func.count(User.id)).where(User.utc_offset.is_not(None))
+            select(func.count(User.id))
         )).scalar()
     await message.answer(
         f"📢 <b>рассылка</b>\n\n"
@@ -487,9 +487,7 @@ async def do_broadcast(message: Message, state: FSMContext, bot: Bot):
         return await message.answer("пустое сообщение, отмена")
 
     async with async_session_maker() as session:
-        users = (await session.execute(
-            select(User).where(User.utc_offset.is_not(None))
-        )).scalars().all()
+        users = (await session.execute(select(User))).scalars().all()
         tg_ids = [u.telegram_id for u in users]
 
     sent = 0
@@ -583,12 +581,22 @@ async def cmd_stats_admin(message: Message):
         premium_users = (await session.execute(
             select(func.count(User.id)).where(User.premium_customs == True)
         )).scalar()
+        all_users = (await session.execute(
+            select(User).order_by(User.id.desc())
+        )).scalars().all()
+
+    user_lines = "\n".join(
+        f"  {'@' + u.username if u.username else 'без username'} — <code>{u.telegram_id}</code> "
+        f"{'⭐️' if u.premium_customs else ''}"
+        for u in all_users
+    )
     await message.answer(
         f"📊 <b>статистика бота</b>\n\n"
         f"всего пользователей: <b>{total_users}</b>\n"
         f"настроили часовой пояс: <b>{active_users}</b>\n"
         f"активных челленджей: <b>{total_challenges}</b>\n"
-        f"premium_customs: <b>{premium_users}</b>",
+        f"премиум: <b>{premium_users}</b>\n\n"
+        f"<b>пользователи:</b>\n{user_lines}",
         parse_mode=ParseMode.HTML
     )
 
@@ -2021,7 +2029,7 @@ async def main():
     scheduler.start()
     asyncio.create_task(_ai_worker())
 
-    await set_main_menu(bot)
+    await set_main_menu(bot, admin_id=ADMIN_ID)
     logger.info("бот запущен, все системы активны 🚀")
     await dp.start_polling(bot)
 
