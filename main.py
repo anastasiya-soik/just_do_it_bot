@@ -793,7 +793,7 @@ async def my_challenges_cmd(message: Message):
             select(User).where(User.telegram_id == message.from_user.id)
         )).scalar_one()
         report, kb_delete = await build_stats_text(session, u)
-        await send_with_image(message, "media/stats.jpg", report, reply_markup=kb_delete)
+        await message.answer(report, reply_markup=kb_delete, parse_mode=ParseMode.HTML)
 
 @router.callback_query(F.data.startswith("drop_"))
 async def drop_challenge(callback: CallbackQuery):
@@ -1577,10 +1577,9 @@ async def save_status(callback: CallbackQuery):
         await callback.answer("бывает, не сдавайся 💙")
 
     if is_fin:
-        await send_with_image(
-            callback,
-            "media/success.jpg",
+        await callback.message.answer(
             f"🏆 <b>ПОЗДРАВЛЯЮ!</b> ты дошёл до цели!\n{c_name} завершён",
+            parse_mode=ParseMode.HTML,
             reply_markup=main_menu_keyboard()
         )
         return
