@@ -42,9 +42,9 @@ AI_SYSTEM_PROMPT = (
     "Ты — личный коуч по привычкам внутри телеграм-бота just do it. "
     "Твой стиль: короткий, живой, без пафоса и мотивационных клише. "
     "Говоришь на «ты», по-русски, как близкий друг который верит в человека. "
-    "Никогда не ставишь точку в конце сообщения. "
     "Не используешь слова: «безусловно», «конечно», «разумеется», «помни», «не забывай». "
-    "Длина ответа — 1-2 предложения максимум."
+    "Если в контексте есть название конкретной привычки — упомяни её, не говори абстрактно. "
+    "Длина ответа — 1-2 предложения максимум. Каждый раз формулируй по-новому."
 )
 
 STARS_CUSTOM_PRICE = 100
@@ -280,7 +280,7 @@ async def _call_gemini(prompt: str) -> str:
             params={"key": GEMINI_API_KEY},
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"maxOutputTokens": 120, "temperature": 0.9},
+                "generationConfig": {"maxOutputTokens": 120, "temperature": 0.7},
                 "systemInstruction": {"parts": [{"text": AI_SYSTEM_PROMPT}]},
             }
         )
@@ -294,24 +294,19 @@ async def _call_gemini(prompt: str) -> str:
         return text
 
 async def get_ai_motivation(context: str) -> str:
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEY or _redis is None:
         return random.choice(TIPS)
     try:
-        import redis.asyncio as aioredis
-        r = aioredis.from_url(REDIS_URL, decode_responses=False)
-        queue_len = await r.llen(AI_QUEUE_KEY)
+        queue_len = await _redis.llen(AI_QUEUE_KEY)
         if queue_len >= AI_QUEUE_MAXSIZE:
-            await r.aclose()
             return random.choice(TIPS)
         task_id = secrets.token_hex(8)
-        prompt  = f"Контекст пользователя: {context}"
-        payload = f"{task_id}\x00{prompt}".encode()
-        await r.lpush(AI_QUEUE_KEY, payload)
-        await r.aclose()
+        payload = f"{task_id}\x00{context}".encode()
+        await _redis.lpush(AI_QUEUE_KEY, payload)
         loop   = asyncio.get_event_loop()
         future = loop.create_future()
         _ai_futures[task_id] = future
-        return await asyncio.wait_for(future, timeout=10.0)
+        return await asyncio.wait_for(future, timeout=12.0)
     except Exception:
         return random.choice(TIPS)
 
@@ -1879,11 +1874,15 @@ async def motivation_task(bot: Bot):
             if not cs:
                 continue
 
-            max_streak = max((c.current_streak for c in cs), default=0)
-            day_name = "среда" if local_t.weekday() == 2 else "воскресенье"
+            habits = ", ".join(
+                CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+                + f" ({c.current_streak} {plural_days(c.current_streak)} подряд)"
+                for c in cs
+            )
+            is_midweek = local_t.weekday() == 2
             context = (
-                f"{day_name} в трекере привычек. "
-                f"лучший текущий стрик пользователя: {max_streak} дней подряд"
+                f"{'середина недели' if is_midweek else 'конец недели, воскресенье'}. "
+                f"активные привычки пользователя: {habits}"
             )
             tip = await get_ai_motivation(context)
 
@@ -1929,8 +1928,21 @@ async def weekly_stats_task(bot: Bot):
             week_success, week_total = week_stats
             week_pct = int(week_success / max(1, week_total) * 100)
 
+            cs_active = (await session.execute(
+                select(Challenge).where(and_(
+                    Challenge.user_id == u.id,
+                    Challenge.status == ChallengeStatus.active
+                ))
+            )).scalars().all()
+            habit_summary = ", ".join(
+                CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+                + f" (стрик {c.current_streak} {plural_days(c.current_streak)})"
+                for c in cs_active
+            ) or "нет активных привычек"
+
             ai_text = await get_ai_motivation(
-                f"итоги недели: {week_pct}% побед из {week_total} возможных дней в трекере привычек"
+                f"начало новой недели, итоги прошлой: {week_pct}% выполнения за {week_total} дней. "
+                f"привычки: {habit_summary}"
             )
             full_report = f"📊 <b>итоги недели</b>\n\n{report}\n\n💡 {ai_text}"
 
