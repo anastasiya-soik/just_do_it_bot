@@ -587,11 +587,22 @@ async def cmd_stats_admin(message: Message):
         return
     async with async_session_maker() as session:
         total_users = (await session.execute(select(func.count(User.id)))).scalar()
-        active_users = (await session.execute(
-            select(func.count(User.id)).where(User.last_notified_at.is_not(None))
+
+        # с активным челленджем — получат рассылку
+        with_active = (await session.execute(
+            select(func.count(User.id.distinct())).join(Challenge).where(
+                Challenge.status == ChallengeStatus.active
+            )
         )).scalar()
+
+        # зарегались но нет активных челленджей
+        inactive_users = total_users - with_active
+
         total_challenges = (await session.execute(
             select(func.count(Challenge.id)).where(Challenge.status == ChallengeStatus.active)
+        )).scalar()
+        completed_challenges = (await session.execute(
+            select(func.count(Challenge.id)).where(Challenge.status == ChallengeStatus.completed)
         )).scalar()
         premium_users = (await session.execute(
             select(func.count(User.id)).where(User.premium_customs == True)
@@ -601,17 +612,20 @@ async def cmd_stats_admin(message: Message):
         )).scalars().all()
 
     user_lines = "\n".join(
-        f"  {'@' + u.username if u.username else 'без username'} — <code>{u.telegram_id}</code> "
-        f"{'⭐️' if u.premium_customs else ''}"
+        f"  {'@' + u.username if u.username else 'без username'} — <code>{u.telegram_id}</code>"
+        + (" ⭐️" if u.premium_customs else "")
+        + (" 🎯" if u.last_notified_at else "")
         for u in all_users
     )
     await message.answer(
         f"📊 <b>статистика бота</b>\n\n"
         f"всего пользователей: <b>{total_users}</b>\n"
-        f"настроили часовой пояс: <b>{active_users}</b>\n"
+        f"  └ получат рассылку (есть активный челлендж): <b>{with_active}</b>\n"
+        f"  └ зарегались, но без челленджа: <b>{inactive_users}</b>\n\n"
         f"активных челленджей: <b>{total_challenges}</b>\n"
+        f"завершено всего: <b>{completed_challenges}</b>\n"
         f"премиум: <b>{premium_users}</b>\n\n"
-        f"<b>пользователи:</b>\n{user_lines}",
+        f"<b>пользователи</b> (🎯 — хоть раз получал чек):\n{user_lines}",
         parse_mode=ParseMode.HTML
     )
 
