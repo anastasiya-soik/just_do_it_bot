@@ -1639,9 +1639,10 @@ async def save_report_time(message: Message, state: FSMContext):
                 select(User).where(User.telegram_id == message.from_user.id)
             )).scalar_one()
             u.report_time = new_t
+            u.last_notified_at = None
             await session.commit()
         await message.answer(
-            f"✅ время обновлено: <code>{new_t}</code>\n\nуведомления начнут приходить в это время начиная с завтра",
+            f"✅ время обновлено: <code>{new_t}</code>\n\nуведомления начнут приходить в это время уже сегодня",
             parse_mode=ParseMode.HTML,
             reply_markup=main_menu_keyboard()
         )
