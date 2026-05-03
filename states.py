@@ -9,5 +9,7 @@ class ChallengeState(StatesGroup):
     setting_report_time = State()           # Настройка времени отчетов
     setting_start_date = State()            # Ввод своей даты старта (миграция)
     waiting_for_custom_name = State()         # Ввод имени своего челленджа
+    waiting_for_custom_emoji = State()        # Выбор эмодзи для кастомного челленджа
     waiting_for_partner_custom_name = State() # Ввод имени кастомного парного челленджа
+    waiting_for_partner_custom_emoji = State() # Выбор эмодзи для парного кастомного челленджа
     broadcast_text = State()                  # Ввод текста рассылки (только для админа)
