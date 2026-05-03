@@ -1248,7 +1248,7 @@ async def start_custom_flow(callback: CallbackQuery, state: FSMContext):
         InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")
     ]])
     await callback.message.edit_text(
-        "напиши дату старта (ДД.ММ.ГГГГ)\nнапример: <code>01.04.2026</code>",
+        f"напиши дату старта (ДД.ММ.ГГГГ)\nнапример: <code>{date.today().strftime('%d.%m.%Y')}</code>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb_back
     )
@@ -1363,7 +1363,7 @@ async def mode_down_prompt(callback: CallbackQuery, state: FSMContext):
         InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")
     ]])
     await callback.message.edit_text(
-        "напиши дату финиша (ДД.ММ.ГГГГ)\nнапример: <code>31.12.2026</code>",
+        f"напиши дату финиша (ДД.ММ.ГГГГ)\nнапример: <code>{(date.today() + timedelta(days=30)).strftime('%d.%m.%Y')}</code>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb_cancel
     )
@@ -1465,7 +1465,7 @@ async def ed_date_input(callback: CallbackQuery, state: FSMContext):
         InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")
     ]])
     await callback.message.edit_text(
-        "за какое число меняем?\nформат: <code>ДД.ММ.ГГГГ</code>",
+        f"за какое число меняем?\nнапример: <code>{date.today().strftime('%d.%m.%Y')}</code>",
         reply_markup=kb_cancel,
         parse_mode=ParseMode.HTML
     )
