@@ -141,10 +141,10 @@ async def get_heatmap(session, challenge_id: int) -> str:
     for i in range(6, -1, -1):
         d = date.today() - timedelta(days=i)
         status = history.get(d)
-        if status == DayStatus.success:   line.append("✅")
-        elif status == DayStatus.fail:    line.append("😵")
-        elif status == DayStatus.skip:    line.append("⏭")
-        else:                             line.append("○")
+        if status == DayStatus.success:   line.append("🟩")
+        elif status == DayStatus.fail:    line.append("🟥")
+        elif status == DayStatus.skip:    line.append("🟨")
+        else:                             line.append("⬜")
     return "".join(line)
 
 async def recalculate_streak(session, challenge_id: int) -> int:
@@ -373,17 +373,21 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
             partner_label = f" 👥 {partner_name}"
 
         report += f"<b>{name}</b>{partner_label}\n"
-        report += f"🗓 {c.current_streak} {plural_days(c.current_streak)} подряд"
-        if c.longest_streak > c.current_streak:
-            report += f"  ·  рекорд {c.longest_streak}"
-        report += "\n"
-        report += f"✅ {success_count} из {days_in} дней ({pct_done}%)\n"
+        if c.current_streak == 0:
+            report += "🗓 только начал 🔥\n"
+        else:
+            streak_line = f"🗓 {c.current_streak} {plural_days(c.current_streak)} подряд"
+            if c.longest_streak > c.current_streak:
+                streak_line += f"  ·  рекорд {c.longest_streak}"
+            report += streak_line + "\n"
+        report += f"✅ {success_count} из {days_in} {plural_days(days_in)}\n"
         report += f"{heatmap}\n"
 
         if c.target_date:
             full_dist = max(1, (c.target_date - c.start_date).days)
             pct = min(100, max(0, int((date.today() - c.start_date).days / full_dist * 100)))
-            report += f"до финиша: {get_progress_bar(pct)}\n"
+            if pct > 0:
+                report += f"до финиша: {get_progress_bar(pct)}\n"
 
         report += "\n"
         kb_delete.inline_keyboard.append([
