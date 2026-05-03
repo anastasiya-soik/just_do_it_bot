@@ -109,14 +109,16 @@ TIPS = [
 # Стрики за которые начисляется заморозка
 FREEZE_MILESTONES = {7, 14, 30, 60, 100}
 
-def plural_days(n: int) -> str:
-    """Правильное склонение: 1 день, 2 дня, 5 дней"""
+def plural(n: int, one: str, two: str, five: str) -> str:
     if 11 <= n % 100 <= 19:
-        return "дней"
+        return five
     r = n % 10
-    if r == 1:       return "день"
-    if r in (2, 3, 4): return "дня"
-    return "дней"
+    if r == 1:          return one
+    if r in (2, 3, 4):  return two
+    return five
+
+def plural_days(n: int) -> str:
+    return plural(n, "день", "дня", "дней")
 
 # ==========================================
 # ЧАСТЬ 1: УТИЛИТЫ И БИЗНЕС-ЛОГИКА
@@ -214,7 +216,7 @@ async def check_milestone(event, streak: int, c_name: str, session=None) -> None
         )).scalar_one()
         u.freeze_count += 1
         await session.commit()
-        text += f"\n\n🧊 получаешь заморозку — теперь их {u.freeze_count}"
+        text += f"\n\n🧊 получаешь заморозку — теперь у тебя {u.freeze_count} {plural(u.freeze_count, 'заморозка', 'заморозки', 'заморозок')}"
 
     await target.answer(text, parse_mode=ParseMode.HTML)
 
@@ -378,7 +380,7 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
         else:
             streak_line = f"🗓 {c.current_streak} {plural_days(c.current_streak)} подряд"
             if c.longest_streak > c.current_streak:
-                streak_line += f"  ·  рекорд {c.longest_streak}"
+                streak_line += f"  ·  рекорд {c.longest_streak} {plural_days(c.longest_streak)}"
             report += streak_line + "\n"
         report += f"✅ {success_count} из {days_in} {plural_days(days_in)}\n"
         report += f"{heatmap}\n"
@@ -403,9 +405,9 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
 
     footer_parts = []
     if user.freeze_count:
-        footer_parts.append(f"🧊 заморозок: {user.freeze_count}")
+        footer_parts.append(f"🧊 {user.freeze_count} {plural(user.freeze_count, 'заморозка', 'заморозки', 'заморозок')}")
     if completed_count:
-        footer_parts.append(f"завершено: {completed_count}")
+        footer_parts.append(f"завершено {completed_count} {plural(completed_count, 'челлендж', 'челленджа', 'челленджей')}")
     if footer_parts:
         report += "  ·  ".join(footer_parts)
 
@@ -707,8 +709,7 @@ async def set_timezone(message: Message, state: FSMContext):
             f"✅ UTC{offset:+d} — буду приходить вовремя\n\n"
             "вот как это работает:\n"
             "каждый день отмечаешь победу или срыв — бот пришлёт напоминание.\n"
-            "стрики превращаются в XP и звания, за длинные стрики копятся 🧊 заморозки.\n"
-            "пропустил день — поправишь задним числом.\n\n"
+            "за длинные стрики копятся 🧊 заморозки, пропустил день — поправишь задним числом.\n\n"
             "с чего начнём?"
         )
         await message.answer(
@@ -930,7 +931,7 @@ async def payment_done(message: Message):
             u.freeze_count += 1
             await session.commit()
             return await message.answer(
-                f"🧊 <b>+1 заморозка!</b> теперь их у тебя: {u.freeze_count}",
+                f"🧊 <b>+1 заморозка!</b> теперь у тебя {u.freeze_count} {plural(u.freeze_count, 'заморозка', 'заморозки', 'заморозок')}",
                 parse_mode=ParseMode.HTML,
                 reply_markup=main_menu_keyboard()
             )
@@ -938,7 +939,7 @@ async def payment_done(message: Message):
             u.freeze_count += 3
             await session.commit()
             return await message.answer(
-                f"🧊🧊🧊 <b>+3 заморозки!</b> теперь их у тебя: {u.freeze_count}",
+                f"🧊🧊🧊 <b>+3 заморозки!</b> теперь у тебя {u.freeze_count} {plural(u.freeze_count, 'заморозка', 'заморозки', 'заморозок')}",
                 parse_mode=ParseMode.HTML,
                 reply_markup=main_menu_keyboard()
             )
@@ -1498,7 +1499,7 @@ async def save_status(callback: CallbackQuery):
         if freeze_count and freeze_count > 0:
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text=f"🧊 спасти стрик (осталось {freeze_count})",
+                    text=f"🧊 спасти стрик (осталось {freeze_count} {plural(freeze_count, 'заморозка', 'заморозки', 'заморозок')})",
                     callback_data=f"frz_{cid}_{d_str}"
                 )],
                 [InlineKeyboardButton(text="😵 оставить срыв", callback_data=f"fai_{cid}_{d_str}")]
