@@ -1696,7 +1696,9 @@ async def daily_task(bot: Bot):
                 continue
 
             rh, rm = map(int, u.report_time.split(":"))
-            if local_t.hour != rh or local_t.minute != rm:
+            current_minutes = local_t.hour * 60 + local_t.minute
+            target_minutes  = rh * 60 + rm
+            if current_minutes < target_minutes:
                 continue
 
             cs = (await session.execute(
