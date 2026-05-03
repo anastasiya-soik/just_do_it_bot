@@ -55,6 +55,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 # Redis-очередь AI-запросов — выживает при рестарте, не более 50 задач
 AI_QUEUE_KEY     = "ai_queue"
 AI_QUEUE_MAXSIZE = 50
+_redis = None  # инициализируется в main(), используется в daily_task для catch-up
 # in-process futures map: task_id → Future (живёт только в текущем процессе)
 _ai_futures: dict[str, asyncio.Future] = {}
 
@@ -1682,6 +1683,48 @@ async def close_kb(callback: CallbackQuery, state: FSMContext):
 # ЧАСТЬ 7: ПЛАНИРОВЩИК
 # ==========================================
 
+async def _send_checks_for_day(
+    bot: Bot, session, u, target_date: date, *, label_prefix: str = "честный чек на сегодня"
+) -> bool:
+    """Отправляет чек-кнопки по всем незаполненным активным челленджам за target_date.
+    Возвращает True, если хотя бы одно сообщение было отправлено."""
+    cs = (await session.execute(
+        select(Challenge).where(and_(
+            Challenge.user_id == u.id,
+            Challenge.status == ChallengeStatus.active,
+            Challenge.start_date <= target_date
+        ))
+    )).scalars().all()
+
+    if not cs:
+        return False
+
+    d_str      = target_date.strftime("%d.%m.%Y")
+    date_label = f"{target_date.day} {MONTH_NAMES_RU[target_date.month - 1]}"
+    sent       = False
+    for c in cs:
+        day_rec = (await session.execute(
+            select(ChallengeDay).where(and_(
+                ChallengeDay.challenge_id == c.id,
+                ChallengeDay.date == target_date
+            ))
+        )).scalar_one_or_none()
+        if not day_rec:
+            name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+            try:
+                await bot.send_message(
+                    u.telegram_id,
+                    f"🔔 <b>{label_prefix}</b>, {date_label}\n\n{name}",
+                    reply_markup=build_check_kb(c.id, d_str),
+                    disable_notification=u.silent_mode,
+                    parse_mode=ParseMode.HTML
+                )
+                sent = True
+            except Exception:
+                pass
+    return sent
+
+
 async def daily_task(bot: Bot):
     async with async_session_maker() as session:
         now = datetime.now(timezone.utc)
@@ -1693,67 +1736,52 @@ async def daily_task(bot: Bot):
             local_t    = now + timedelta(hours=u.utc_offset)
             user_today = local_t.date()
 
-            if u.last_notified_at == user_today:
+            # --- Сегодняшнее плановое уведомление ---
+            if u.last_notified_at != user_today:
+                rh, rm = map(int, u.report_time.split(":"))
+                current_minutes = local_t.hour * 60 + local_t.minute
+                target_minutes  = rh * 60 + rm
+                if current_minutes >= target_minutes:
+                    cs_today = (await session.execute(
+                        select(Challenge).where(and_(
+                            Challenge.user_id == u.id,
+                            Challenge.status == ChallengeStatus.active
+                        ))
+                    )).scalars().all()
+
+                    if cs_today:
+                        if u.xp > 0 and u.xp % 30 == 0:
+                            try:
+                                tip = await get_ai_motivation(f"пользователь набрал {u.xp} XP в трекере привычек")
+                                await bot.send_message(
+                                    u.telegram_id,
+                                    f"💡 <b>инсайт дня:</b>\n{tip}",
+                                    parse_mode=ParseMode.HTML
+                                )
+                            except Exception:
+                                pass
+
+                        await _send_checks_for_day(bot, session, u, user_today)
+                        u.last_notified_at = user_today
+                        await session.commit()
+
+            # --- Catch-up: прошлые дни без чека ---
+            if _redis is None:
                 continue
 
-            rh, rm = map(int, u.report_time.split(":"))
-            current_minutes = local_t.hour * 60 + local_t.minute
-            target_minutes  = rh * 60 + rm
-            if current_minutes < target_minutes:
-                continue
+            for days_back in range(1, 8):
+                past_day  = user_today - timedelta(days=days_back)
+                redis_key = f"notif:{u.telegram_id}:{past_day.isoformat()}"
 
-            cs = (await session.execute(
-                select(Challenge).where(and_(
-                    Challenge.user_id == u.id,
-                    Challenge.status == ChallengeStatus.active
-                ))
-            )).scalars().all()
+                if await _redis.exists(redis_key):
+                    continue
 
-            if not cs:
-                continue
-
-            # AI-инсайт каждые 30 XP (вместо статичных TIPS)
-            if u.xp > 0 and u.xp % 30 == 0:
-                try:
-                    tip = await get_ai_motivation(f"пользователь набрал {u.xp} XP в трекере привычек")
-                    await bot.send_message(
-                        u.telegram_id,
-                        f"💡 <b>инсайт дня:</b>\n{tip}",
-                        parse_mode=ParseMode.HTML
-                    )
-                except Exception:
-                    pass
-
-            # Собираем только незаполненные челленджи
-            d_str = user_today.strftime("%d.%m.%Y")
-            unchecked = []
-            for c in cs:
-                day_rec = (await session.execute(
-                    select(ChallengeDay).where(and_(
-                        ChallengeDay.challenge_id == c.id,
-                        ChallengeDay.date == user_today
-                    ))
-                )).scalar_one_or_none()
-                if not day_rec:
-                    unchecked.append(c)
-
-            if unchecked:
-                date_label = f"{user_today.day} {MONTH_NAMES_RU[user_today.month - 1]}"
-                for c in unchecked:
-                    name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
-                    try:
-                        await bot.send_message(
-                            u.telegram_id,
-                            f"🔔 <b>честный чек на сегодня</b>, {date_label}\n\n{name}",
-                            reply_markup=build_check_kb(c.id, d_str),
-                            disable_notification=u.silent_mode,
-                            parse_mode=ParseMode.HTML
-                        )
-                    except Exception:
-                        pass
-
-            u.last_notified_at = user_today
-            await session.commit()
+                await _send_checks_for_day(
+                    bot, session, u, past_day,
+                    label_prefix=f"пропущенный чек за"
+                )
+                # Помечаем день как обработанный независимо от результата
+                await _redis.setex(redis_key, 9 * 24 * 3600, "1")
 
 async def auto_skip_task():
     #Запускается каждую минуту. Для пользователей у кого сейчас местная полночь — закрывает вчерашний день по политике (skip или fail). ИСПРАВЛЕНО (v2 баг): в v2 была попытка вычислить (now_utc.hour + User.utc_offset) % 24 прямо в SQL WHERE — это сравнение Python-int с SQLAlchemy-Column, что даёт TypeError. Теперь фильтр по utc_offset != None, а проверка local_hour == 0 делается в Python.
@@ -2042,7 +2070,9 @@ async def main():
 
     await init_db()
 
+    global _redis
     redis_client = aioredis.from_url(REDIS_URL, decode_responses=False)
+    _redis = redis_client
     storage = RedisStorage(redis=redis_client)
 
     bot = Bot(token=BOT_TOKEN)
