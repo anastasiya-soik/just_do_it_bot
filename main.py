@@ -122,28 +122,6 @@ def plural_days(n: int) -> str:
 # ЧАСТЬ 1: УТИЛИТЫ И БИЗНЕС-ЛОГИКА
 # ==========================================
 
-RANKS = [
-    (0,   "🥚 только вылупился",          "xp 0–49"),
-    (50,  "🌱 что-то начинается",          "xp 50–199"),
-    (200, "😤 серьёзный человек",          "xp 200–499"),
-    (500, "🔥 машина без срывов",          "xp 500–999"),
-    (1000,"💀 страшный сон вредных привычек", "xp 1000+"),
-]
-
-def get_user_rank(xp: int) -> str:
-    label = RANKS[0][1]
-    for threshold, name, _ in RANKS:
-        if xp >= threshold:
-            label = name
-    next_rank = None
-    for threshold, name, _ in RANKS:
-        if xp < threshold:
-            next_rank = (threshold, name)
-            break
-    rank_line = f"<b>{label}</b>  ·  {xp} xp"
-    if next_rank:
-        rank_line += f"  →  до «{next_rank[1]}»: {next_rank[0] - xp} xp"
-    return rank_line
 
 def get_progress_bar(percent: int) -> str:
     p = max(0, min(100, percent))
@@ -356,51 +334,58 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
         ))
     )).scalars().all()
 
-    report = f"{get_user_rank(user.xp)}\n\n"
     kb_delete = InlineKeyboardMarkup(inline_keyboard=[])
 
     if not challenges:
-        report += (
-            "\n\nпока пусто 👀\n\n"
+        report = (
+            "пока пусто 👀\n\n"
             "запусти первый челлендж — и я начну считать твои победы.\n"
             "жми <b>🎯 новый челлендж</b> в меню"
         )
-    else:
-        for c in challenges:
-            stats_res = await session.execute(
-                select(
-                    func.count(ChallengeDay.id).filter(ChallengeDay.status == DayStatus.success),
-                    func.count(ChallengeDay.id).filter(ChallengeDay.status == DayStatus.fail)
-                ).where(ChallengeDay.challenge_id == c.id)
-            )
-            success_count, fail_count = stats_res.fetchone()
-            days_in = max(1, (date.today() - c.start_date).days + 1)
-            heatmap = await get_heatmap(session, c.id)
-            name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
-            partner_label = ""
-            if c.partner_challenge_id:
-                partner = (await session.execute(
-                    select(User)
-                    .join(Challenge, Challenge.user_id == User.id)
-                    .where(Challenge.id == c.partner_challenge_id)
-                )).scalar_one_or_none()
-                partner_name = f"@{partner.username}" if partner and partner.username else "друг"
-                partner_label = f" 👥 с {partner_name}"
+        return report, kb_delete
 
-            report += f"\n{name}{partner_label}\n"
-            report += f"— {c.current_streak} {plural_days(c.current_streak)} подряд\n"
-            report += f"— рекорд {c.longest_streak} {plural_days(c.longest_streak)}\n"
-            report += f"— {success_count} побед, {fail_count} срывов\n"
-            report += f"— эта неделя: {heatmap}\n"
+    report = ""
+    for c in challenges:
+        stats_res = await session.execute(
+            select(
+                func.count(ChallengeDay.id).filter(ChallengeDay.status == DayStatus.success),
+                func.count(ChallengeDay.id).filter(ChallengeDay.status == DayStatus.fail)
+            ).where(ChallengeDay.challenge_id == c.id)
+        )
+        success_count, fail_count = stats_res.fetchone()
+        days_in = max(1, (date.today() - c.start_date).days + 1)
+        total_marked = success_count + fail_count
+        pct_done = int(success_count / days_in * 100)
+        heatmap = await get_heatmap(session, c.id)
+        name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
 
-            if c.target_date:
-                full_dist = max(1, (c.target_date - c.start_date).days)
-                pct = min(100, max(0, int((date.today() - c.start_date).days / full_dist * 100)))
-                report += f"— до финиша: {get_progress_bar(pct)}\n"
+        partner_label = ""
+        if c.partner_challenge_id:
+            partner = (await session.execute(
+                select(User)
+                .join(Challenge, Challenge.user_id == User.id)
+                .where(Challenge.id == c.partner_challenge_id)
+            )).scalar_one_or_none()
+            partner_name = f"@{partner.username}" if partner and partner.username else "друг"
+            partner_label = f" 👥 {partner_name}"
 
-            kb_delete.inline_keyboard.append([
-                InlineKeyboardButton(text=f"🗑 отменить {name}", callback_data=f"drop_{c.id}")
-            ])
+        report += f"<b>{name}</b>{partner_label}\n"
+        report += f"🗓 {c.current_streak} {plural_days(c.current_streak)} подряд"
+        if c.longest_streak > c.current_streak:
+            report += f"  ·  рекорд {c.longest_streak}"
+        report += "\n"
+        report += f"✅ {success_count} из {days_in} дней ({pct_done}%)\n"
+        report += f"{heatmap}\n"
+
+        if c.target_date:
+            full_dist = max(1, (c.target_date - c.start_date).days)
+            pct = min(100, max(0, int((date.today() - c.start_date).days / full_dist * 100)))
+            report += f"до финиша: {get_progress_bar(pct)}\n"
+
+        report += "\n"
+        kb_delete.inline_keyboard.append([
+            InlineKeyboardButton(text=f"🗑 отменить {name}", callback_data=f"drop_{c.id}")
+        ])
 
     completed_count = (await session.execute(
         select(func.count(Challenge.id)).where(and_(
@@ -409,7 +394,14 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
         ))
     )).scalar()
 
-    report += f"\nзавершено: {completed_count}   заморозок: {user.freeze_count}"
+    footer_parts = []
+    if user.freeze_count:
+        footer_parts.append(f"🧊 заморозок: {user.freeze_count}")
+    if completed_count:
+        footer_parts.append(f"завершено: {completed_count}")
+    if footer_parts:
+        report += "  ·  ".join(footer_parts)
+
     return report, kb_delete
 
 # ==========================================
@@ -1439,12 +1431,6 @@ async def save_status(callback: CallbackQuery):
             )).scalar_one()
             freeze_count = u.freeze_count
 
-        if status == DayStatus.success and (not day or day.status != DayStatus.success):
-            xp_user = (await session.execute(
-                select(User).join(Challenge).where(Challenge.id == int(cid))
-            )).scalar_one()
-            xp_user.xp += 10
-
         if not day:
             session.add(ChallengeDay(challenge_id=int(cid), date=d, status=status))
         else:
@@ -1750,17 +1736,6 @@ async def daily_task(bot: Bot):
                     )).scalars().all()
 
                     if cs_today:
-                        if u.xp > 0 and u.xp % 30 == 0:
-                            try:
-                                tip = await get_ai_motivation(f"пользователь набрал {u.xp} XP в трекере привычек")
-                                await bot.send_message(
-                                    u.telegram_id,
-                                    f"💡 <b>инсайт дня:</b>\n{tip}",
-                                    parse_mode=ParseMode.HTML
-                                )
-                            except Exception:
-                                pass
-
                         await _send_checks_for_day(bot, session, u, user_today)
                         u.last_notified_at = user_today
                         await session.commit()
@@ -1822,8 +1797,8 @@ async def auto_skip_task():
                     await session.commit()
 
 async def motivation_task(bot: Bot):
-    # Среда (2) и пятница (4) в 12:00 по локальному времени — короткое AI-сообщение
-    MOTIVATION_DAYS = {2, 4}
+    # Среда (2) и воскресенье (6) в 12:00 по локальному времени — короткое AI-сообщение
+    MOTIVATION_DAYS = {2, 6}
     async with async_session_maker() as session:
         now_utc = datetime.now(timezone.utc)
         res = await session.execute(select(User).where(User.utc_offset.is_not(None)))
@@ -1846,9 +1821,9 @@ async def motivation_task(bot: Bot):
                 continue
 
             max_streak = max((c.current_streak for c in cs), default=0)
-            day_name = "среда" if local_t.weekday() == 2 else "пятница"
+            day_name = "среда" if local_t.weekday() == 2 else "воскресенье"
             context = (
-                f"{day_name}, середина недели в трекере привычек. "
+                f"{day_name} в трекере привычек. "
                 f"лучший текущий стрик пользователя: {max_streak} дней подряд"
             )
             tip = await get_ai_motivation(context)
