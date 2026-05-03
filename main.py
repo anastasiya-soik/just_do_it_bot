@@ -253,6 +253,8 @@ KB_WELCOME     = quick_kb(("📊 мой прогресс", "quick_stats"), ("�
 async def _ai_worker(redis: "redis.asyncio.Redis"):
     """Воркер: тянет задачи из Redis List, выполняет по одной с паузой 0.5с"""
     while True:
+        task_id = None
+        result  = None
         try:
             item = await redis.brpop(AI_QUEUE_KEY, timeout=5)
             if not item:
@@ -263,9 +265,10 @@ async def _ai_worker(redis: "redis.asyncio.Redis"):
         except Exception:
             result = random.choice(TIPS)
         finally:
-            future = _ai_futures.pop(task_id, None)
-            if future and not future.done():
-                future.set_result(result)
+            if task_id:
+                future = _ai_futures.pop(task_id, None)
+                if future and not future.done():
+                    future.set_result(result)
             await asyncio.sleep(0.5)
 
 async def _call_gemini(prompt: str) -> str:
