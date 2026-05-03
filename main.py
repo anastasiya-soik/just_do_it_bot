@@ -588,7 +588,7 @@ async def cmd_stats_admin(message: Message):
     async with async_session_maker() as session:
         total_users = (await session.execute(select(func.count(User.id)))).scalar()
         active_users = (await session.execute(
-            select(func.count(User.id)).where(User.utc_offset.is_not(None))
+            select(func.count(User.id)).where(User.last_notified_at.is_not(None))
         )).scalar()
         total_challenges = (await session.execute(
             select(func.count(Challenge.id)).where(Challenge.status == ChallengeStatus.active)
@@ -1800,11 +1800,10 @@ async def daily_task(bot: Bot):
     async with async_session_maker() as session:
         now = datetime.now(timezone.utc)
 
-        res = await session.execute(
-            select(User).where(User.utc_offset.is_not(None))
-        )
+        res = await session.execute(select(User))
         for u in res.scalars():
-            local_t    = now + timedelta(hours=u.utc_offset)
+            offset     = u.utc_offset if u.utc_offset is not None else 0
+            local_t    = now + timedelta(hours=offset)
             user_today = local_t.date()
 
             # --- Сегодняшнее плановое уведомление ---
@@ -1849,11 +1848,10 @@ async def auto_skip_task():
         now_utc   = datetime.now(timezone.utc)
         yesterday = date.today() - timedelta(days=1)
 
-        res = await session.execute(
-            select(User).where(User.utc_offset.is_not(None))
-        )
+        res = await session.execute(select(User))
         for u in res.scalars():
-            local_hour = (now_utc.hour + u.utc_offset) % 24
+            offset     = u.utc_offset if u.utc_offset is not None else 0
+            local_hour = (now_utc.hour + offset) % 24
             if local_hour != 0:
                 continue
 
@@ -1886,9 +1884,10 @@ async def motivation_task(bot: Bot):
     MOTIVATION_DAYS = {2, 6}
     async with async_session_maker() as session:
         now_utc = datetime.now(timezone.utc)
-        res = await session.execute(select(User).where(User.utc_offset.is_not(None)))
+        res = await session.execute(select(User))
         for u in res.scalars():
-            local_t = now_utc + timedelta(hours=u.utc_offset)
+            offset  = u.utc_offset if u.utc_offset is not None else 0
+            local_t = now_utc + timedelta(hours=offset)
             if local_t.weekday() not in MOTIVATION_DAYS or local_t.hour != 12:
                 continue
             user_today = local_t.date()
@@ -1933,9 +1932,10 @@ async def motivation_task(bot: Bot):
 async def weekly_stats_task(bot: Bot):
     async with async_session_maker() as session:
         now_utc = datetime.now(timezone.utc)
-        res = await session.execute(select(User).where(User.utc_offset.is_not(None)))
+        res = await session.execute(select(User))
         for u in res.scalars():
-            local_t = now_utc + timedelta(hours=u.utc_offset)
+            offset  = u.utc_offset if u.utc_offset is not None else 0
+            local_t = now_utc + timedelta(hours=offset)
             # Понедельник в 10:00 по локальному времени
             if local_t.weekday() != 0 or local_t.hour != 10:
                 continue
