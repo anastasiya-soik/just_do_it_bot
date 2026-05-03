@@ -11,7 +11,6 @@ from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardButton,
@@ -210,7 +209,7 @@ async def check_milestone(event, streak: int, c_name: str, session=None) -> None
     )
     if gives_freeze and session:
         # Определяем пользователя через callback или message
-        tg_id = event.from_user.id if isinstance(event, CallbackQuery) else event.from_user.id
+        tg_id = event.from_user.id
         u = (await session.execute(
             select(User).where(User.telegram_id == tg_id)
         )).scalar_one()
@@ -465,7 +464,7 @@ async def cmd_help(message: Message):
         "время уведомлений, часовой пояс, режим пропущенных дней, покупка заморозок\n\n"
 
         "📊 статистика за неделю приходит автоматически каждый понедельник в 10:00\n"
-        "💡 мотивация — по средам и пятницам в 12:00\n\n"
+        "💡 мотивация от AI — по средам и воскресеньям в 12:00\n\n"
         "/cancel — отменить любое действие\n"
         "/faq — частые вопросы и советы по мотивации",
         parse_mode=ParseMode.HTML,
@@ -769,7 +768,7 @@ async def onboarding_guide_cb(callback: CallbackQuery):
         "  копятся автоматически: за 7, 14, 30, 60, 100 дней\n"
         "  можно докупить в настройках за ⭐️\n\n"
         "▸ <b>прогресс</b>\n"
-        "  XP, звания и тепловая карта — в «📊 мой прогресс»\n"
+        "  стрики и тепловая карта — в «📊 мой прогресс»\n"
         "  еженедельная сводка приходит каждый понедельник"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1563,7 +1562,7 @@ async def save_status(callback: CallbackQuery):
             f"✅ <b>{c_name}</b> — сделал!",
             parse_mode=ParseMode.HTML
         )
-        await callback.answer("+10 XP 🔥")
+        await callback.answer("🔥 засчитано!")
     elif status == DayStatus.skip:
         await callback.message.edit_text(
             f"⏭ <b>{c_name}</b> — пропущено",
