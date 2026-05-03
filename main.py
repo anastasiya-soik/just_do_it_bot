@@ -1881,7 +1881,8 @@ async def motivation_task(bot: Bot):
             )
             is_midweek = local_t.weekday() == 2
             context = (
-                f"{'середина недели' if is_midweek else 'конец недели, воскресенье'}. "
+                f"напиши короткое мотивационное сообщение (1-2 предложения). "
+                f"контекст: {'середина недели' if is_midweek else 'конец недели, воскресенье'}. "
                 f"активные привычки пользователя: {habits}"
             )
             tip = await get_ai_motivation(context)
@@ -1941,8 +1942,9 @@ async def weekly_stats_task(bot: Bot):
             ) or "нет активных привычек"
 
             ai_text = await get_ai_motivation(
-                f"начало новой недели, итоги прошлой: {week_pct}% выполнения за {week_total} дней. "
-                f"привычки: {habit_summary}"
+                f"напиши короткий вдохновляющий комментарий к итогам прошлой недели (1-2 предложения). "
+                f"итоги: {week_pct}% выполнения за {week_total} дней. "
+                f"привычки пользователя: {habit_summary}"
             )
             full_report = f"📊 <b>итоги недели</b>\n\n{report}\n\n💡 {ai_text}"
 
@@ -2075,22 +2077,16 @@ async def fallback_echo(message: Message):
     _fallback_timestamps[uid].append(now)
 
     user_text = message.text
-    prompt = (
-        "ты — дерзкий, остроумный ассистент Telegram-бота 'Just Never Do It' для трекинга вредных привычек. "
-        "всегда пишешь с маленькой буквы, коротко, живо, иногда с лёгким юмором. "
-        "подстраиваешься под стиль пользователя: если он пишет неформально — ты тоже, если серьёзно — чуть серьёзнее. "
-        "кнопки в боте (используй только эти названия): "
-        "«📊 мой прогресс», «🎯 новый челлендж», «📝 поправить день», «⚙️ настройки». "
-        "команды: /help — гайд, /faq — частые вопросы, /cancel — отмена. "
-        "бот умеет: создавать челленджи (алкоголь, сахар, фастфуд, никотин, шортсы или свой), "
-        "отмечать дни (✅ победа / 😵 срыв / ⏭ пропуск), считать стрики, "
-        "редактировать историю, использовать 🧊 заморозки для сохранения стрика. "
-        f"пользователь написал: «{user_text}». "
-        "ответь 1-2 предложения по-русски. "
-        "если жалуется на мотивацию или лень — поддержи с юмором и намекни на /faq. "
-        "если спрашивает как пользоваться — /help. "
-        "не придумывай несуществующие кнопки и команды."
+    system = (
+        AI_SYSTEM_PROMPT +
+        " Ты также отвечаешь на вопросы о боте. "
+        "Кнопки бота: «📊 мой прогресс», «🎯 новый челлендж», «📝 поправить день», «⚙️ настройки». "
+        "Команды: /help — гайд, /faq — частые вопросы, /cancel — отмена. "
+        "Не придумывай несуществующие кнопки и команды. "
+        "Если жалуется на мотивацию — поддержи с лёгким юмором, намекни на /faq. "
+        "Если спрашивает как пользоваться — /help."
     )
+    prompt = f"пользователь написал: «{user_text}». ответь 1-2 предложения."
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.post(
@@ -2098,10 +2094,14 @@ async def fallback_echo(message: Message):
                 params={"key": GEMINI_API_KEY},
                 json={
                     "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 100, "temperature": 0.95}
+                    "generationConfig": {"maxOutputTokens": 100, "temperature": 0.75},
+                    "systemInstruction": {"parts": [{"text": system}]},
                 }
             )
             reply = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            reply = reply.rstrip(" .…")
+            if reply:
+                reply = reply[0].lower() + reply[1:]
     except Exception:
         reply = "что-то пошло не так у меня в голове 🤯 попробуй /faq или нажми на кнопку в меню"
 
