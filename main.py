@@ -939,26 +939,9 @@ async def payment_done(message: Message):
                 reply_markup=main_menu_keyboard()
             )
 
-CUSTOM_EMOJIS = [
-    "💪", "🏃", "🧘", "📚", "✏️", "🎯",
-    "🚫", "🍎", "💤", "🚰", "🎨", "🎵",
-    "💻", "🌿", "🧹", "🌅", "🤸", "🧡",
-    "🚴", "🧠",
-]
-
-def emoji_picker_kb(prefix: str) -> InlineKeyboardMarkup:
-    """Клавиатура выбора эмодзи для кастомного челленджа."""
-    rows = []
-    row = []
-    for i, e in enumerate(CUSTOM_EMOJIS):
-        row.append(InlineKeyboardButton(text=e, callback_data=f"{prefix}{e}"))
-        if len(row) == 5:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([InlineKeyboardButton(text="без эмодзи ➡️", callback_data=f"{prefix}none")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+KB_SKIP_EMOJI = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="без эмодзи ➡️", callback_data="skip_emoji")]
+])
 
 
 @router.message(StateFilter(ChallengeState.waiting_for_custom_name))
@@ -973,26 +956,45 @@ async def process_custom_name(message: Message, state: FSMContext):
         return await message.answer("слишком длинное — напиши до 30 символов:")
     await state.update_data(ctype="custom", custom_name=name)
     await message.answer(
-        f"отлично! теперь выбери эмодзи для <b>{name}</b>:",
-        reply_markup=emoji_picker_kb("cemoji_"),
+        f"отлично! отправь любой эмодзи для <b>{name}</b> 👇",
+        reply_markup=KB_SKIP_EMOJI,
         parse_mode=ParseMode.HTML
     )
     await state.set_state(ChallengeState.waiting_for_custom_emoji)
 
 
-@router.callback_query(F.data.startswith("cemoji_"))
-async def pick_custom_emoji(callback: CallbackQuery, state: FSMContext):
-    emoji = callback.data[len("cemoji_"):]
-    data  = await state.get_data()
-    name  = data.get("custom_name", "")
-    full_name = f"{emoji} {name}" if emoji != "none" else name
+@router.message(StateFilter(ChallengeState.waiting_for_custom_emoji))
+async def receive_custom_emoji(message: Message, state: FSMContext):
+    data = await state.get_data()
+    name = data.get("custom_name", "")
+    emoji = message.text.strip() if message.text else ""
+    # берём только первый символ на случай если прислали несколько
+    if emoji:
+        emoji = emoji[0]
+    full_name = f"{emoji} {name}" if emoji else name
     await state.update_data(custom_name=full_name)
-    await callback.message.edit_text(
+    await message.answer(
         f"выбран: <b>{full_name}</b>\nкогда ты начал?",
         reply_markup=start_date_keyboard(),
         parse_mode=ParseMode.HTML
     )
     await state.set_state(ChallengeState.setting_start_date)
+
+
+@router.callback_query(F.data == "skip_emoji")
+async def skip_emoji(callback: CallbackQuery, state: FSMContext):
+    current = await state.get_state()
+    data    = await state.get_data()
+    if current == ChallengeState.waiting_for_custom_emoji:
+        name = data.get("custom_name", "")
+        await callback.message.edit_text(
+            f"выбран: <b>{name}</b>\nкогда ты начал?",
+            reply_markup=start_date_keyboard(),
+            parse_mode=ParseMode.HTML
+        )
+        await state.set_state(ChallengeState.setting_start_date)
+    elif current == ChallengeState.waiting_for_partner_custom_emoji:
+        await _create_partner_challenge(callback, state, data)
     await callback.answer()
 
 @router.callback_query(F.data == "new_partner")
@@ -1050,42 +1052,71 @@ async def process_partner_custom_name(message: Message, state: FSMContext):
         return await message.answer("слишком длинное — напиши до 30 символов:")
     await state.update_data(partner_custom_name=name)
     await message.answer(
-        f"отлично! теперь выбери эмодзи для <b>{name}</b>:",
-        reply_markup=emoji_picker_kb("pemoji_"),
+        f"отлично! отправь любой эмодзи для <b>{name}</b> 👇",
+        reply_markup=KB_SKIP_EMOJI,
         parse_mode=ParseMode.HTML
     )
     await state.set_state(ChallengeState.waiting_for_partner_custom_emoji)
 
 
-@router.callback_query(F.data.startswith("pemoji_"))
-async def pick_partner_custom_emoji(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    emoji = callback.data[len("pemoji_"):]
+@router.message(StateFilter(ChallengeState.waiting_for_partner_custom_emoji))
+async def receive_partner_custom_emoji(message: Message, state: FSMContext, bot: Bot):
     data  = await state.get_data()
     name  = data.get("partner_custom_name", "")
-    full_name = f"{emoji} {name}" if emoji != "none" else name
+    emoji = (message.text or "").strip()
+    if emoji:
+        emoji = emoji[0]
+    full_name = f"{emoji} {name}" if emoji else name
+    await _create_partner_challenge_from_msg(message, state, bot, full_name)
 
+
+async def _create_partner_challenge(callback: CallbackQuery, state: FSMContext, data: dict):
+    """Создаёт партнёрский кастомный челлендж без эмодзи (через skip_emoji)."""
+    bot = callback.bot
+    name = data.get("partner_custom_name", "")
     token = secrets.token_hex(8)
     async with async_session_maker() as session:
         u = (await session.execute(
             select(User).where(User.telegram_id == callback.from_user.id)
+        )).scalar_one()
+        c = Challenge(user_id=u.id, challenge_type=name, start_date=date.today())
+        session.add(c)
+        await session.flush()
+        session.add(PartnerInvite(token=token, challenge_id=c.id, created_at=date.today()))
+        await session.commit()
+    me = await bot.get_me()
+    invite_link = f"https://t.me/{me.username}?start=join_{token}"
+    await state.clear()
+    await callback.message.answer(
+        f"👥 <b>парный челлендж создан: {name}</b>\n\n"
+        f"отправь другу эту ссылку:\n{invite_link}\n\n"
+        "как только он примет — у вас начнётся общий стрик 🔥",
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_menu_keyboard()
+    )
+
+
+async def _create_partner_challenge_from_msg(message: Message, state: FSMContext, bot, full_name: str):
+    token = secrets.token_hex(8)
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == message.from_user.id)
         )).scalar_one()
         c = Challenge(user_id=u.id, challenge_type=full_name, start_date=date.today())
         session.add(c)
         await session.flush()
         session.add(PartnerInvite(token=token, challenge_id=c.id, created_at=date.today()))
         await session.commit()
-
     me = await bot.get_me()
     invite_link = f"https://t.me/{me.username}?start=join_{token}"
     await state.clear()
-    await callback.message.answer(
+    await message.answer(
         f"👥 <b>парный челлендж создан: {full_name}</b>\n\n"
         f"отправь другу эту ссылку:\n{invite_link}\n\n"
         "как только он примет — у вас начнётся общий стрик 🔥",
         parse_mode=ParseMode.HTML,
         reply_markup=main_menu_keyboard()
     )
-    await callback.answer()
 
 @router.callback_query(F.data.startswith("partner_") & ~F.data.startswith("partner_accept_") & ~F.data.startswith("partner_custom"))
 async def create_partner_challenge(callback: CallbackQuery, bot: Bot):
