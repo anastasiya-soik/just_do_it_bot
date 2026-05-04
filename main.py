@@ -407,7 +407,9 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
                 report += f"до финиша: {get_progress_bar(pct)}\n"
 
         report += "\n"
+        time_label = f"⏰ {c.report_time}" if c.report_time else "⏰ время"
         kb_delete.inline_keyboard.append([
+            InlineKeyboardButton(text=time_label, callback_data=f"set_ctime_{c.id}"),
             InlineKeyboardButton(text=f"🗑 отменить {name}", callback_data=f"drop_{c.id}")
         ])
 
@@ -425,6 +427,10 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
         footer_parts.append(f"завершено {completed_count} {plural(completed_count, 'челлендж', 'челленджа', 'челленджей')}")
     if footer_parts:
         report += "  ·  ".join(footer_parts)
+
+    kb_delete.inline_keyboard.append([
+        InlineKeyboardButton(text="📤 поделиться стриком", callback_data="share_streak")
+    ])
 
     return report, kb_delete
 
@@ -627,10 +633,29 @@ async def cmd_stats_admin(message: Message):
         premium_users = (await session.execute(
             select(func.count(User.id)).where(User.premium_customs == True)
         )).scalar()
+        week_ago = date.today() - timedelta(days=7)
+        new_this_week = (await session.execute(
+            select(func.count(User.id)).where(User.id.in_(
+                select(User.id).join(Challenge).where(Challenge.start_date >= week_ago)
+            ))
+        )).scalar()
+
+        top_types_rows = (await session.execute(
+            select(Challenge.challenge_type, func.count(Challenge.id).label("cnt"))
+            .where(Challenge.status == ChallengeStatus.active)
+            .group_by(Challenge.challenge_type)
+            .order_by(func.count(Challenge.id).desc())
+            .limit(5)
+        )).all()
+
         all_users = (await session.execute(
             select(User).order_by(User.id.desc())
         )).scalars().all()
 
+    top_lines = "\n".join(
+        f"  {CHALLENGE_NAMES.get(r[0], r[0])} — {r[1]} чел."
+        for r in top_types_rows
+    )
     user_lines = "\n".join(
         f"  {'@' + u.username if u.username else 'без username'} — <code>{u.telegram_id}</code>"
         + (" ⭐️" if u.premium_customs else "")
@@ -640,11 +665,13 @@ async def cmd_stats_admin(message: Message):
     await message.answer(
         f"📊 <b>статистика бота</b>\n\n"
         f"всего пользователей: <b>{total_users}</b>\n"
-        f"  └ получат рассылку (есть активный челлендж): <b>{with_active}</b>\n"
-        f"  └ зарегались, но без челленджа: <b>{inactive_users}</b>\n\n"
+        f"  └ новых за 7 дней: <b>{new_this_week}</b>\n"
+        f"  └ получат рассылку (есть активный): <b>{with_active}</b>\n"
+        f"  └ без челленджа: <b>{inactive_users}</b>\n\n"
         f"активных челленджей: <b>{total_challenges}</b>\n"
         f"завершено всего: <b>{completed_challenges}</b>\n"
         f"премиум: <b>{premium_users}</b>\n\n"
+        f"<b>топ челленджей (активных):</b>\n{top_lines}\n\n"
         f"<b>пользователи</b> (🎯 — хоть раз получал чек):\n{user_lines}",
         parse_mode=ParseMode.HTML
     )
@@ -832,6 +859,37 @@ async def my_challenges_cmd(message: Message):
         )).scalar_one()
         report, kb_delete = await build_stats_text(session, u)
         await message.answer(report, reply_markup=kb_delete, parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data == "share_streak")
+async def share_streak(callback: CallbackQuery):
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )).scalar_one_or_none()
+        if not u:
+            return await callback.answer("пользователь не найден", show_alert=True)
+        challenges = (await session.execute(
+            select(Challenge).where(and_(
+                Challenge.user_id == u.id,
+                Challenge.status == ChallengeStatus.active
+            ))
+        )).scalars().all()
+        if not challenges:
+            return await callback.answer("нет активных челленджей", show_alert=True)
+
+        lines = []
+        for c in challenges:
+            name = get_challenge_name(c)
+            streak = c.current_streak
+            if streak > 0:
+                lines.append(f"{name} — {streak} {plural_days(streak)} подряд 🔥")
+            else:
+                lines.append(f"{name} — только начал 💪")
+
+    share_text = "мой прогресс в just do it bot:\n\n" + "\n".join(lines)
+    await callback.answer()
+    await callback.message.answer(share_text)
+
 
 @router.callback_query(F.data.startswith("drop_"))
 async def drop_challenge(callback: CallbackQuery):
@@ -1772,6 +1830,73 @@ async def save_report_time(message: Message, state: FSMContext):
             parse_mode=ParseMode.HTML
         )
 
+@router.callback_query(F.data.startswith("set_ctime_"))
+async def set_challenge_time_prompt(callback: CallbackQuery, state: FSMContext):
+    c_id = int(callback.data.split("_")[2])
+    await state.set_state(ChallengeState.setting_challenge_time)
+    await state.update_data(challenge_id=c_id)
+    kb_cancel = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="↩ сбросить на общее", callback_data=f"reset_ctime_{c_id}"),
+        InlineKeyboardButton(text="❌ отмена", callback_data="close_settings"),
+    ]])
+    await callback.message.answer(
+        "напиши время напоминания для этого челленджа (ЧЧ:ММ)\nнапример: <code>08:00</code>\n\nили сбрось на общее время 👇",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_cancel
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("reset_ctime_"))
+async def reset_challenge_time(callback: CallbackQuery, state: FSMContext):
+    c_id = int(callback.data.split("_")[2])
+    await state.clear()
+    async with async_session_maker() as session:
+        c = (await session.execute(
+            select(Challenge).join(User).where(and_(
+                Challenge.id == c_id,
+                User.telegram_id == callback.from_user.id
+            ))
+        )).scalar_one_or_none()
+        if c:
+            c.report_time = None
+            await session.commit()
+    await callback.message.answer("✅ время сброшено — будет использоваться общее из настроек")
+    await callback.answer()
+
+
+@router.message(StateFilter(ChallengeState.setting_challenge_time))
+async def save_challenge_time(message: Message, state: FSMContext):
+    if message.text and message.text.lower() in ["отмена", "назад"]:
+        await state.clear()
+        return await message.answer("ок", reply_markup=main_menu_keyboard())
+    try:
+        new_t = datetime.strptime(message.text.strip(), "%H:%M").strftime("%H:%M")
+        data = await state.get_data()
+        c_id = data.get("challenge_id")
+        async with async_session_maker() as session:
+            c = (await session.execute(
+                select(Challenge).join(User).where(and_(
+                    Challenge.id == c_id,
+                    User.telegram_id == message.from_user.id
+                ))
+            )).scalar_one_or_none()
+            if c:
+                c.report_time = new_t
+                await session.commit()
+        await message.answer(
+            f"✅ время для этого челленджа: <code>{new_t}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_keyboard()
+        )
+        await state.clear()
+    except ValueError:
+        await message.answer(
+            "формат: <code>ЧЧ:ММ</code> (например, <code>08:00</code>)",
+            parse_mode=ParseMode.HTML
+        )
+
+
 @router.callback_query(F.data.in_({"toggle_silent", "toggle_policy"}))
 async def toggles(callback: CallbackQuery):
     async with async_session_maker() as session:
@@ -1854,22 +1979,50 @@ async def daily_task(bot: Bot):
             user_today = local_t.date()
 
             # --- Сегодняшнее плановое уведомление ---
-            if u.last_notified_at != user_today:
-                rh, rm = map(int, u.report_time.split(":"))
-                current_minutes = local_t.hour * 60 + local_t.minute
-                target_minutes  = rh * 60 + rm
-                if current_minutes >= target_minutes:
-                    cs_today = (await session.execute(
-                        select(Challenge).where(and_(
-                            Challenge.user_id == u.id,
-                            Challenge.status == ChallengeStatus.active
-                        ))
-                    )).scalars().all()
+            current_minutes = local_t.hour * 60 + local_t.minute
+            cs_today = (await session.execute(
+                select(Challenge).where(and_(
+                    Challenge.user_id == u.id,
+                    Challenge.status == ChallengeStatus.active
+                ))
+            )).scalars().all()
 
-                    if cs_today:
-                        await _send_checks_for_day(bot, session, u, user_today)
-                        u.last_notified_at = user_today
-                        await session.commit()
+            any_sent = False
+            for c in cs_today:
+                eff_time = c.report_time or u.report_time
+                rh, rm = map(int, eff_time.split(":"))
+                target_minutes = rh * 60 + rm
+                redis_key_today = f"notif_c:{c.id}:{user_today.isoformat()}"
+                if _redis and await _redis.exists(redis_key_today):
+                    continue
+                if current_minutes >= target_minutes:
+                    day_rec = (await session.execute(
+                        select(ChallengeDay).where(and_(
+                            ChallengeDay.challenge_id == c.id,
+                            ChallengeDay.date == user_today
+                        ))
+                    )).scalar_one_or_none()
+                    if not day_rec:
+                        name = get_challenge_name(c)
+                        d_str = user_today.strftime("%d.%m.%Y")
+                        date_label = f"{user_today.day} {MONTH_NAMES_RU[user_today.month - 1]}"
+                        try:
+                            await bot.send_message(
+                                u.telegram_id,
+                                f"🔔 <b>честный чек на сегодня</b>, {date_label}\n\n{name}",
+                                reply_markup=build_check_kb(c.id, d_str),
+                                disable_notification=u.silent_mode,
+                                parse_mode=ParseMode.HTML
+                            )
+                            any_sent = True
+                        except Exception:
+                            pass
+                    if _redis:
+                        await _redis.setex(redis_key_today, 26 * 3600, "1")
+
+            if any_sent:
+                u.last_notified_at = user_today
+                await session.commit()
 
             # --- Catch-up: прошлые дни без чека ---
             if _redis is None:

@@ -13,3 +13,4 @@ class ChallengeState(StatesGroup):
     waiting_for_partner_custom_name = State() # Ввод имени кастомного парного челленджа
     waiting_for_partner_custom_emoji = State() # Выбор эмодзи для парного кастомного челленджа
     broadcast_text = State()                  # Ввод текста рассылки (только для админа)
+    setting_challenge_time = State()          # Настройка времени напоминания для конкретного челленджа

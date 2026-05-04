@@ -72,6 +72,7 @@ class Challenge(Base):
     )
     custom_name:    Mapped[str | None]      = mapped_column(String(255), nullable=True)
     custom_emoji:   Mapped[str | None]      = mapped_column(String(255), nullable=True)
+    report_time:    Mapped[str | None]      = mapped_column(String(8), nullable=True)
 
     user: Mapped["User"]               = relationship(back_populates="challenges")
     days: Mapped[list["ChallengeDay"]] = relationship(
