@@ -8,7 +8,7 @@ import httpx
 from datetime import date, datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
-from aiogram.enums import ParseMode
+from aiogram.enums import ParseMode, MessageEntityType
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.redis import RedisStorage
@@ -104,6 +104,27 @@ TIPS = [
     "одна ошибка — не поражение, а просто повод проанализировать триггеры 🤝",
     "твоя сила воли — это мышца, она качается каждым твоим «нет» 🦾"
 ]
+
+def get_challenge_name(c) -> str:
+    if c.challenge_type == "custom":
+        return f"{c.custom_emoji or '🎯'} {c.custom_name or 'свой челлендж'}"
+    return CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+
+def extract_emoji(message: Message) -> str:
+    if message.entities:
+        for entity in message.entities:
+            if entity.type == MessageEntityType.CUSTOM_EMOJI:
+                fallback = (message.text or "")[entity.offset:entity.offset + entity.length]
+                return f'<tg-emoji emoji-id="{entity.custom_emoji_id}">{fallback}</tg-emoji>'
+    import unicodedata
+    text = (message.text or "").strip()
+    result = ""
+    for char in text:
+        if unicodedata.category(char) in ("So", "Sm") or ord(char) > 0x2600:
+            result += char
+        else:
+            break
+    return result or text
 
 # Стрики за которые начисляется заморозка
 FREEZE_MILESTONES = {7, 14, 30, 60, 100}
@@ -980,10 +1001,7 @@ async def process_custom_name(message: Message, state: FSMContext):
 async def receive_custom_emoji(message: Message, state: FSMContext):
     data = await state.get_data()
     name = data.get("custom_name", "")
-    emoji = message.text.strip() if message.text else ""
-    # берём только первый символ на случай если прислали несколько
-    if emoji:
-        emoji = emoji[0]
+    emoji = extract_emoji(message)
     full_name = f"{emoji} {name}" if emoji else name
     await state.update_data(custom_name=full_name)
     await message.answer(
