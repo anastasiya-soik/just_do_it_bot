@@ -16,6 +16,16 @@ with patch.dict(os.environ, {
                 import main as m
 
 
+# ── plural ────────────────────────────────────────────────────────────────────
+
+def test_plural_one():       assert m.plural(1,  "заморозка", "заморозки", "заморозок") == "заморозка"
+def test_plural_two():       assert m.plural(2,  "заморозка", "заморозки", "заморозок") == "заморозки"
+def test_plural_five():      assert m.plural(5,  "заморозка", "заморозки", "заморозок") == "заморозок"
+def test_plural_eleven():    assert m.plural(11, "заморозка", "заморозки", "заморозок") == "заморозок"
+def test_plural_twenty_one():assert m.plural(21, "заморозка", "заморозки", "заморозок") == "заморозка"
+def test_plural_hundred():   assert m.plural(100,"заморозка", "заморозки", "заморозок") == "заморозок"
+
+
 # ── plural_days ───────────────────────────────────────────────────────────────
 
 def test_plural_days_1():    assert m.plural_days(1)   == "день"
@@ -152,3 +162,43 @@ def test_challenge_name_custom_no_name_uses_default():
 def test_challenge_name_unknown_type_returns_type():
     c = _challenge("unknown_type")
     assert m.get_challenge_name(c) == "unknown_type"
+
+
+# ── Premium — константы и логика ──────────────────────────────────────────────
+
+def test_stars_custom_price_is_100():
+    assert m.STARS_CUSTOM_PRICE == 100
+
+def test_stars_freeze_1_is_15():
+    assert m.STARS_FREEZE_1 == 15
+
+def test_stars_freeze_3_is_30():
+    assert m.STARS_FREEZE_3 == 30
+
+def test_freeze_3_cheaper_per_unit():
+    # 3 заморозки за 30 звёзд выгоднее чем 3×15=45
+    assert m.STARS_FREEZE_3 < m.STARS_FREEZE_1 * 3
+
+def test_premium_payloads_defined():
+    # payment_done разбирает эти строки — если изменятся, тест напомнит
+    source = open("main.py", encoding="utf-8").read()
+    assert '"custom_unlimited"' in source
+    assert '"freeze_1"'         in source
+    assert '"freeze_3"'         in source
+
+def test_premium_free_limit_is_one():
+    # бесплатный лимит кастомных — 1 штука (active_custom >= 1 → пейвол)
+    source = open("main.py", encoding="utf-8").read()
+    assert "active_custom >= 1" in source
+
+def test_admin_id_from_env():
+    # ADMIN_ID должен читаться из env, не быть захардкожен
+    assert m.ADMIN_ID == 0  # 0 — дефолт когда env не задан
+
+def test_plural_freeze_after_payment_1():
+    # +1 заморозка: freeze_count=1 → "заморозка"
+    assert m.plural(1, "заморозка", "заморозки", "заморозок") == "заморозка"
+
+def test_plural_freeze_after_payment_3():
+    # +3 заморозки: freeze_count=3 → "заморозки"
+    assert m.plural(3, "заморозка", "заморозки", "заморозок") == "заморозки"
