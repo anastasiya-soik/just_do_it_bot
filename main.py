@@ -8,7 +8,7 @@ import httpx
 from datetime import date, datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
-from aiogram.enums import ParseMode, MessageEntityType
+from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.redis import RedisStorage
@@ -111,20 +111,20 @@ def get_challenge_name(c) -> str:
     return CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
 
 def extract_emoji(message: Message) -> str:
-    if message.entities:
-        for entity in message.entities:
-            if entity.type == MessageEntityType.CUSTOM_EMOJI:
-                fallback = (message.text or "")[entity.offset:entity.offset + entity.length]
-                return f'<tg-emoji emoji-id="{entity.custom_emoji_id}">{fallback}</tg-emoji>'
     import unicodedata
     text = (message.text or "").strip()
+    if not text:
+        return ""
     result = ""
     for char in text:
-        if unicodedata.category(char) in ("So", "Sm") or ord(char) > 0x2600:
+        if (unicodedata.category(char) in ("So", "Sm")
+                or ord(char) > 0x2600
+                or char in ("️", "‍", "⃣")
+                or 0x1F1E0 <= ord(char) <= 0x1F1FF):
             result += char
         else:
             break
-    return result or text
+    return result
 
 # Стрики за которые начисляется заморозка
 FREEZE_MILESTONES = {7, 14, 30, 60, 100}
