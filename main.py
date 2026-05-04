@@ -703,14 +703,31 @@ async def cmd_start(message: Message, state: FSMContext):
             ]])
             await send_with_image(
                 message, "media/welcome.jpg",
-                "привет! я помогаю бросить вредные привычки — через челленджи, стрики и немного геймификации 🧊\n\n"
-                "сначала настрою уведомления под твой часовой пояс.\n"
-                "напиши <b>который сейчас час</b> — просто цифра, например: <code>14</code>",
+                "привет 👋\n\n"
+                "это бот, который помогает реально бросить вредные привычки.\n"
+                "не мотивационные цитаты — а стрики, которые жалко терять 🔥\n\n"
+                "<b>шаг 1 из 2</b> — настройка уведомлений ⏰\n"
+                "напиши который сейчас час — просто цифра, например: <code>14</code>",
                 reply_markup=kb_cancel
             )
             await state.set_state(ChallengeState.waiting_for_time)
         else:
-            await message.answer("с возвращением 👋 продолжаем?", reply_markup=main_menu_keyboard())
+            async with async_session_maker() as session:
+                active = (await session.execute(
+                    select(Challenge).where(and_(
+                        Challenge.user_id == user.id,
+                        Challenge.status == ChallengeStatus.active
+                    ))
+                )).scalars().all()
+            if active:
+                lines = "\n".join(
+                    f"  {get_challenge_name(c)} — {c.current_streak} {plural_days(c.current_streak)} 🔥"
+                    for c in active
+                )
+                text = f"с возвращением! 👋\n\n{lines}\n\nпродолжаем?"
+            else:
+                text = "с возвращением! 👋 пора запустить первый челлендж?"
+            await message.answer(text, reply_markup=main_menu_keyboard())
 
 @router.message(StateFilter(ChallengeState.waiting_for_time))
 async def set_timezone(message: Message, state: FSMContext):
@@ -734,19 +751,19 @@ async def set_timezone(message: Message, state: FSMContext):
             u.utc_offset = offset
             await session.commit()
 
-        onboarding_text = (
-            f"✅ UTC{offset:+d} — буду приходить вовремя\n\n"
-            "вот как это работает:\n"
-            "каждый день отмечаешь победу или срыв — бот пришлёт напоминание.\n"
-            "за длинные стрики копятся 🧊 заморозки, пропустил день — поправишь задним числом.\n\n"
-            "с чего начнём?"
-        )
+        kb_challenges = InlineKeyboardMarkup(inline_keyboard=[
+            *[[InlineKeyboardButton(text=v, callback_data=f"new_{k}")]
+              for k, v in CHALLENGE_NAMES.items()],
+            [InlineKeyboardButton(text="✍️ свой челлендж", callback_data="new_custom")],
+            [InlineKeyboardButton(text="📖 как это работает", callback_data="onboarding_guide")],
+        ])
         await message.answer(
-            onboarding_text,
+            f"✅ UTC{offset:+d} — буду приходить вовремя\n\n"
+            "<b>шаг 2 из 2</b> — выбери первую привычку которую хочешь изменить 👇",
             parse_mode=ParseMode.HTML,
             reply_markup=main_menu_keyboard()
         )
-        await message.answer("👇", reply_markup=onboarding_keyboard())
+        await message.answer("с чего начнём?", reply_markup=kb_challenges)
         await state.clear()
 
     except ValueError:
