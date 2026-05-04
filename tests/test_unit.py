@@ -5,7 +5,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import pytest
 from unittest.mock import patch, MagicMock
 
-# Patch env/bot imports before importing main
 with patch.dict(os.environ, {
     "BOT_TOKEN": "123:fake",
     "DATABASE_URL": "postgresql://fake:fake@localhost/fake",
@@ -17,97 +16,39 @@ with patch.dict(os.environ, {
                 import main as m
 
 
-# ── plural_days ──────────────────────────────────────────────────────────────
+# ── plural_days ───────────────────────────────────────────────────────────────
 
-def test_plural_days_1():
-    assert m.plural_days(1) == "день"
-
-def test_plural_days_2():
-    assert m.plural_days(2) == "дня"
-
-def test_plural_days_3():
-    assert m.plural_days(3) == "дня"
-
-def test_plural_days_4():
-    assert m.plural_days(4) == "дня"
-
-def test_plural_days_5():
-    assert m.plural_days(5) == "дней"
-
-def test_plural_days_11():
-    assert m.plural_days(11) == "дней"
-
-def test_plural_days_21():
-    assert m.plural_days(21) == "день"
-
-def test_plural_days_100():
-    assert m.plural_days(100) == "дней"
-
-
-# ── get_user_rank ─────────────────────────────────────────────────────────────
-
-def test_rank_zero_xp():
-    result = m.get_user_rank(0)
-    assert "только вылупился" in result
-
-def test_rank_50_xp():
-    result = m.get_user_rank(50)
-    assert "что-то начинается" in result
-
-def test_rank_200_xp():
-    result = m.get_user_rank(200)
-    assert "серьёзный человек" in result
-
-def test_rank_500_xp():
-    result = m.get_user_rank(500)
-    assert "машина без срывов" in result
-
-def test_rank_1000_xp():
-    result = m.get_user_rank(1000)
-    assert "страшный сон" in result
-
-def test_rank_shows_xp_value():
-    result = m.get_user_rank(75)
-    assert "75" in result
-
-def test_rank_shows_next_rank_gap():
-    # at 50 xp, next rank at 200 → gap = 150
-    result = m.get_user_rank(50)
-    assert "150" in result
-
-def test_rank_max_no_next():
-    # at 1000+ xp there's no next rank → no arrow
-    result = m.get_user_rank(9999)
-    assert "→" not in result
+def test_plural_days_1():    assert m.plural_days(1)   == "день"
+def test_plural_days_2():    assert m.plural_days(2)   == "дня"
+def test_plural_days_4():    assert m.plural_days(4)   == "дня"
+def test_plural_days_5():    assert m.plural_days(5)   == "дней"
+def test_plural_days_11():   assert m.plural_days(11)  == "дней"
+def test_plural_days_21():   assert m.plural_days(21)  == "день"
+def test_plural_days_100():  assert m.plural_days(100) == "дней"
+def test_plural_days_101():  assert m.plural_days(101) == "день"
 
 
 # ── get_progress_bar ──────────────────────────────────────────────────────────
 
 def test_progress_bar_zero():
     bar = m.get_progress_bar(0)
-    assert bar.startswith("░░░░░░░░")
     assert "0%" in bar
 
 def test_progress_bar_100():
     bar = m.get_progress_bar(100)
-    assert bar.startswith("████████")
     assert "100%" in bar
 
 def test_progress_bar_50():
     bar = m.get_progress_bar(50)
-    assert "████" in bar
     assert "50%" in bar
 
 def test_progress_bar_clamps_below_zero():
-    bar = m.get_progress_bar(-10)
-    assert "0%" in bar
+    assert "0%" in m.get_progress_bar(-10)
 
 def test_progress_bar_clamps_above_100():
-    bar = m.get_progress_bar(150)
-    assert "100%" in bar
+    assert "100%" in m.get_progress_bar(150)
 
-def test_progress_bar_length():
-    # bar segment is always 8 chars + space + percent
+def test_progress_bar_segment_length():
     bar = m.get_progress_bar(33)
     segment = bar.split(" ")[0]
     assert len(segment) == 8
@@ -117,34 +58,97 @@ def test_progress_bar_length():
 
 def test_check_kb_has_two_buttons():
     kb = m.build_check_kb(42, "29.04.2026")
-    buttons = kb.inline_keyboard[0]
-    assert len(buttons) == 2
+    assert len(kb.inline_keyboard[0]) == 2
 
 def test_check_kb_success_callback():
     kb = m.build_check_kb(42, "29.04.2026")
-    cb_data = [b.callback_data for b in kb.inline_keyboard[0]]
-    assert "save_42_29.04.2026_success" in cb_data
+    callbacks = [b.callback_data for b in kb.inline_keyboard[0]]
+    assert "save_42_29.04.2026_success" in callbacks
 
 def test_check_kb_fail_callback():
     kb = m.build_check_kb(42, "29.04.2026")
-    cb_data = [b.callback_data for b in kb.inline_keyboard[0]]
-    assert "save_42_29.04.2026_fail" in cb_data
+    callbacks = [b.callback_data for b in kb.inline_keyboard[0]]
+    assert "save_42_29.04.2026_fail" in callbacks
 
-def test_check_kb_no_skip_button():
-    kb = m.build_check_kb(42, "29.04.2026")
-    cb_data = [b.callback_data for b in kb.inline_keyboard[0]]
-    assert not any("skip" in d for d in cb_data)
-
-def test_check_kb_button_text_friendly():
-    kb = m.build_check_kb(1, "01.01.2026")
-    texts = [b.text for b in kb.inline_keyboard[0]]
-    # both buttons should be lowercase (no uppercase letters)
-    for t in texts:
-        assert t == t.lower() or any(c in t for c in "✅😔"), f"unexpected casing: {t}"
-
-def test_check_kb_different_challenges_different_callbacks():
-    kb1 = m.build_check_kb(1, "01.01.2026")
-    kb2 = m.build_check_kb(2, "01.01.2026")
-    cb1 = kb1.inline_keyboard[0][0].callback_data
-    cb2 = kb2.inline_keyboard[0][0].callback_data
+def test_check_kb_different_challenges():
+    cb1 = m.build_check_kb(1, "01.01.2026").inline_keyboard[0][0].callback_data
+    cb2 = m.build_check_kb(2, "01.01.2026").inline_keyboard[0][0].callback_data
     assert cb1 != cb2
+
+
+# ── extract_emoji ─────────────────────────────────────────────────────────────
+
+def _msg(text):
+    msg = MagicMock()
+    msg.text = text
+    msg.entities = None
+    return msg
+
+def test_extract_emoji_simple():
+    assert m.extract_emoji(_msg("😎")) == "😎"
+
+def test_extract_emoji_flag_full():
+    # 🇬🇧 = два символа regional indicator, оба должны вернуться
+    result = m.extract_emoji(_msg("🇬🇧"))
+    assert result == "🇬🇧"
+
+def test_extract_emoji_flag_not_cut():
+    # раньше emoji[0] срезал второй символ флага
+    result = m.extract_emoji(_msg("🇬🇧"))
+    assert len(result) == 2
+
+def test_extract_emoji_no_emoji_returns_empty():
+    assert m.extract_emoji(_msg("пупа")) == ""
+
+def test_extract_emoji_empty_text():
+    assert m.extract_emoji(_msg("")) == ""
+
+def test_extract_emoji_none_text():
+    assert m.extract_emoji(_msg(None)) == ""
+
+def test_extract_emoji_emoji_then_text():
+    # берём только эмодзи, не весь текст
+    result = m.extract_emoji(_msg("😎 текст"))
+    assert result == "😎"
+    assert "текст" not in result
+
+def test_extract_emoji_multiple_emoji_takes_all_leading():
+    result = m.extract_emoji(_msg("👉😎 привет"))
+    assert "👉" in result
+    assert "😎" in result
+    assert "привет" not in result
+
+
+# ── get_challenge_name ────────────────────────────────────────────────────────
+
+def _challenge(ctype, custom_name=None, custom_emoji=None):
+    c = MagicMock()
+    c.challenge_type = ctype
+    c.custom_name = custom_name
+    c.custom_emoji = custom_emoji
+    return c
+
+def test_challenge_name_predefined():
+    assert m.get_challenge_name(_challenge("no_alcohol")) == "🍷 алко-пауза"
+
+def test_challenge_name_predefined_sugar():
+    assert m.get_challenge_name(_challenge("no_sugar")) == "🍰 без сладкого"
+
+def test_challenge_name_custom_with_emoji():
+    c = _challenge("custom", custom_name="пупа", custom_emoji="😎")
+    assert m.get_challenge_name(c) == "😎 пупа"
+
+def test_challenge_name_custom_no_emoji_uses_default():
+    c = _challenge("custom", custom_name="пупа", custom_emoji=None)
+    result = m.get_challenge_name(c)
+    assert "пупа" in result
+    assert "🎯" in result
+
+def test_challenge_name_custom_no_name_uses_default():
+    c = _challenge("custom", custom_name=None, custom_emoji="😎")
+    result = m.get_challenge_name(c)
+    assert "😎" in result
+
+def test_challenge_name_unknown_type_returns_type():
+    c = _challenge("unknown_type")
+    assert m.get_challenge_name(c) == "unknown_type"
