@@ -202,3 +202,55 @@ def test_plural_freeze_after_payment_1():
 def test_plural_freeze_after_payment_3():
     # +3 заморозки: freeze_count=3 → "заморозки"
     assert m.plural(3, "заморозка", "заморозки", "заморозок") == "заморозки"
+
+
+# ── get_status_kb ─────────────────────────────────────────────────────────────
+
+def test_status_kb_has_three_rows():
+    kb = m.get_status_kb(7, "01.05.2026")
+    assert len(kb.inline_keyboard) == 3
+
+def test_status_kb_success_callback():
+    kb = m.get_status_kb(7, "01.05.2026")
+    callbacks = [b.callback_data for b in kb.inline_keyboard[0]]
+    assert "save_7_01.05.2026_success" in callbacks
+
+def test_status_kb_fail_callback():
+    kb = m.get_status_kb(7, "01.05.2026")
+    callbacks = [b.callback_data for b in kb.inline_keyboard[0]]
+    assert "save_7_01.05.2026_fail" in callbacks
+
+def test_status_kb_skip_callback():
+    kb = m.get_status_kb(7, "01.05.2026")
+    assert kb.inline_keyboard[1][0].callback_data == "save_7_01.05.2026_skip"
+
+def test_status_kb_close_callback():
+    kb = m.get_status_kb(7, "01.05.2026")
+    assert kb.inline_keyboard[2][0].callback_data == "close_settings"
+
+def test_status_kb_different_challenges():
+    cb1 = m.get_status_kb(1, "01.01.2026").inline_keyboard[0][0].callback_data
+    cb2 = m.get_status_kb(2, "01.01.2026").inline_keyboard[0][0].callback_data
+    assert cb1 != cb2
+
+
+# ── quick_kb ──────────────────────────────────────────────────────────────────
+
+def test_quick_kb_single_button():
+    kb = m.quick_kb(("текст", "cb_data"))
+    assert len(kb.inline_keyboard) == 1
+    assert kb.inline_keyboard[0][0].text == "текст"
+    assert kb.inline_keyboard[0][0].callback_data == "cb_data"
+
+def test_quick_kb_multiple_buttons_each_in_own_row():
+    kb = m.quick_kb(("а", "cb_a"), ("б", "cb_b"), ("в", "cb_c"))
+    assert len(kb.inline_keyboard) == 3
+
+def test_quick_kb_callbacks_match():
+    kb = m.quick_kb(("один", "c1"), ("два", "c2"))
+    assert kb.inline_keyboard[0][0].callback_data == "c1"
+    assert kb.inline_keyboard[1][0].callback_data == "c2"
+
+def test_quick_kb_empty_returns_empty():
+    kb = m.quick_kb()
+    assert kb.inline_keyboard == []

@@ -7,7 +7,11 @@
       "Bash(head -30 \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\\\\main.py\")",
       "Bash(cat \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\\\\main.py\")",
       "Bash(grep -n \"RedisStorage\\\\|REDIS\\\\|redis\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\\\\main.py\")",
-      "Bash(grep -n \"gemini\\\\|model\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\\\\main.py\")"
+      "Bash(grep -n \"gemini\\\\|model\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\\\\main.py\")",
+      "Bash(ls *)",
+      "Bash(cd \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\")",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(.venv/Scripts/python -m pytest tests/ -v)"
     ]
   }
 }
