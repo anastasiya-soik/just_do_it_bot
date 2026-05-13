@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wsl ls *)",
+      "Bash(dir \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\" /b /a:-d)",
+      "Bash(findstr -v .venv)",
+      "Bash(head -30 \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\\\\main.py\")",
+      "Bash(cat \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\\\\main.py\")",
+      "Bash(grep -n \"RedisStorage\\\\|REDIS\\\\|redis\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\\\\main.py\")",
+      "Bash(grep -n \"gemini\\\\|model\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\madam\\\\bot\\\\main.py\")"
+    ]
+  }
+}
