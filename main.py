@@ -27,7 +27,8 @@ from states import ChallengeState
 from keyboards import (
     main_menu_keyboard, settings_keyboard, freeze_keyboard, set_main_menu, start_date_keyboard,
     onboarding_keyboard,
-    BTN_MY_CHALLENGES, BTN_NEW_CHALLENGE, BTN_EDIT_HISTORY, BTN_SETTINGS
+    BTN_MY_CHALLENGES, BTN_NEW_CHALLENGE, BTN_EDIT_HISTORY, BTN_SETTINGS,
+    BTN_CHECKIN_YESTERDAY, BTN_ARCHIVE
 )
 
 load_dotenv()
@@ -128,6 +129,38 @@ def extract_emoji(message: Message) -> str:
 
 # Стрики за которые начисляется заморозка
 FREEZE_MILESTONES = {7, 14, 30, 60, 100}
+
+async def smart_menu(session, user) -> "ReplyKeyboardMarkup":
+    """Возвращает главное меню с динамическими кнопками."""
+    from aiogram.types import ReplyKeyboardMarkup
+    yesterday = date.today() - timedelta(days=1)
+    # показываем "отметить вчера" если есть активный челлендж без записи за вчера
+    active = (await session.execute(
+        select(Challenge).where(and_(
+            Challenge.user_id == user.id,
+            Challenge.status == ChallengeStatus.active
+        ))
+    )).scalars().all()
+    show_checkin = False
+    for c in active:
+        day = (await session.execute(
+            select(ChallengeDay).where(and_(
+                ChallengeDay.challenge_id == c.id,
+                ChallengeDay.date == yesterday
+            ))
+        )).scalar_one_or_none()
+        if not day:
+            show_checkin = True
+            break
+    # показываем "архив побед" если есть завершённые
+    completed_count = (await session.execute(
+        select(func.count(Challenge.id)).where(and_(
+            Challenge.user_id == user.id,
+            Challenge.status == ChallengeStatus.completed
+        ))
+    )).scalar()
+    show_archive = completed_count > 0
+    return main_menu_keyboard(show_checkin=show_checkin, show_archive=show_archive)
 
 def plural(n: int, one: str, two: str, five: str) -> str:
     if 11 <= n % 100 <= 19:
@@ -872,6 +905,68 @@ async def my_challenges_cmd(message: Message):
         )).scalar_one()
         report, kb_delete = await build_stats_text(session, u)
         await message.answer(report, reply_markup=kb_delete, parse_mode=ParseMode.HTML)
+
+@router.message(F.text == BTN_CHECKIN_YESTERDAY)
+async def checkin_yesterday_cmd(message: Message):
+    yesterday = date.today() - timedelta(days=1)
+    d_str = yesterday.strftime("%d.%m.%Y")
+    date_label = f"{yesterday.day} {MONTH_NAMES_RU[yesterday.month - 1]}"
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )).scalar_one()
+        challenges = (await session.execute(
+            select(Challenge).where(and_(
+                Challenge.user_id == u.id,
+                Challenge.status == ChallengeStatus.active
+            ))
+        )).scalars().all()
+        unmarked = []
+        for c in challenges:
+            day = (await session.execute(
+                select(ChallengeDay).where(and_(
+                    ChallengeDay.challenge_id == c.id,
+                    ChallengeDay.date == yesterday
+                ))
+            )).scalar_one_or_none()
+            if not day:
+                unmarked.append(c)
+    if not unmarked:
+        return await message.answer("вчера всё уже отмечено 👍")
+    for c in unmarked:
+        name = get_challenge_name(c)
+        await message.answer(
+            f"📅 <b>{date_label}</b> — {name}",
+            reply_markup=build_check_kb(c.id, d_str),
+            parse_mode=ParseMode.HTML
+        )
+
+@router.message(F.text == BTN_ARCHIVE)
+async def archive_cmd(message: Message):
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )).scalar_one()
+        completed = (await session.execute(
+            select(Challenge).where(and_(
+                Challenge.user_id == u.id,
+                Challenge.status == ChallengeStatus.completed
+            )).order_by(Challenge.completed_at.desc())
+        )).scalars().all()
+    if not completed:
+        return await message.answer("пока нет завершённых челленджей — всё впереди 💪")
+    lines = [f"🏆 <b>архив побед</b> — {len(completed)} {plural(len(completed), 'челлендж', 'челленджа', 'челленджей')}\n"]
+    for c in completed:
+        name = get_challenge_name(c)
+        duration = (c.completed_at - c.start_date).days if c.completed_at else 0
+        streak = c.longest_streak
+        finished = c.completed_at.strftime("%d.%m.%Y") if c.completed_at else "—"
+        lines.append(
+            f"{name}\n"
+            f"  завершён {finished}  ·  {duration} {plural_days(duration)}\n"
+            f"  лучший стрик: {streak} {plural_days(streak)}\n"
+        )
+    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
 @router.callback_query(F.data == "share_streak")
 async def share_streak(callback: CallbackQuery):
@@ -1648,9 +1743,24 @@ async def save_status(callback: CallbackQuery):
             select(Challenge).where(Challenge.id == int(cid))
         )).scalar_one()
         c_type = c.challenge_type
+        partner_tg_id = None
+        partner_c_name = None
         if c.partner_challenge_id:
             await recalculate_streak(session, c.partner_challenge_id)
             await session.commit()
+            if status == DayStatus.fail:
+                partner_row = (await session.execute(
+                    select(User.telegram_id, Challenge.challenge_type, Challenge.custom_name, Challenge.custom_emoji)
+                    .join(Challenge, Challenge.user_id == User.id)
+                    .where(Challenge.id == c.partner_challenge_id)
+                )).fetchone()
+                if partner_row:
+                    partner_tg_id = partner_row[0]
+                    partner_c_name = get_challenge_name(type('_', (), {
+                        'challenge_type': partner_row[1],
+                        'custom_name': partner_row[2],
+                        'custom_emoji': partner_row[3]
+                    })())
 
         is_fin = bool(c.target_date and d == c.target_date and status == DayStatus.success)
         if is_fin:
@@ -1681,6 +1791,18 @@ async def save_status(callback: CallbackQuery):
             parse_mode=ParseMode.HTML
         )
         await callback.answer("бывает, не сдавайся 💙")
+
+    # уведомляем партнёра о срыве
+    if partner_tg_id:
+        sender_name = callback.from_user.first_name or callback.from_user.username or "партнёр"
+        try:
+            await callback.bot.send_message(
+                partner_tg_id,
+                f"😬 <b>{sender_name}</b> сегодня сорвался в челлендже {partner_c_name or c_name}\n\nсамое время написать ему — поддержка решает 💙",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            pass
 
     if is_fin:
         await callback.message.answer(
@@ -2200,8 +2322,8 @@ async def weekly_stats_task(bot: Bot):
         for u in res.scalars():
             offset  = u.utc_offset if u.utc_offset is not None else 0
             local_t = now_utc + timedelta(hours=offset)
-            # Понедельник в 10:00 по локальному времени
-            if local_t.weekday() != 0 or local_t.hour != 10:
+            # Воскресенье в 20:00 по локальному времени
+            if local_t.weekday() != 6 or local_t.hour != 20:
                 continue
             user_today = local_t.date()
             if u.last_weekly_stats_at == user_today:
@@ -2209,20 +2331,32 @@ async def weekly_stats_task(bot: Bot):
 
             report, _ = await build_stats_text(session, u)
 
-            # Считаем % побед за прошлую неделю для AI-комментария
-            week_start = user_today - timedelta(days=7)
-            week_stats = (await session.execute(
-                select(
+            # Считаем % побед за эту и прошлую неделю
+            week_start     = user_today - timedelta(days=7)
+            prev_week_start = user_today - timedelta(days=14)
+
+            def week_query(start, end):
+                return select(
                     func.count(ChallengeDay.id).filter(ChallengeDay.status == DayStatus.success),
                     func.count(ChallengeDay.id)
                 ).join(Challenge).where(and_(
                     Challenge.user_id == u.id,
-                    ChallengeDay.date >= week_start,
-                    ChallengeDay.date < user_today
+                    ChallengeDay.date >= start,
+                    ChallengeDay.date < end
                 ))
-            )).fetchone()
-            week_success, week_total = week_stats
+
+            week_success, week_total = (await session.execute(week_query(week_start, user_today))).fetchone()
+            prev_success, prev_total = (await session.execute(week_query(prev_week_start, week_start))).fetchone()
             week_pct = int(week_success / max(1, week_total) * 100)
+            prev_pct = int(prev_success / max(1, prev_total) * 100)
+
+            delta = week_pct - prev_pct
+            if delta > 0:
+                trend = f"📈 лучше прошлой недели на {delta}%"
+            elif delta < 0:
+                trend = f"📉 чуть хуже прошлой недели на {abs(delta)}%"
+            else:
+                trend = "➡️ такой же результат как неделю назад"
 
             cs_active = (await session.execute(
                 select(Challenge).where(and_(
@@ -2231,17 +2365,21 @@ async def weekly_stats_task(bot: Bot):
                 ))
             )).scalars().all()
             habit_summary = ", ".join(
-                CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
-                + f" (стрик {c.current_streak} {plural_days(c.current_streak)})"
+                get_challenge_name(c) + f" (стрик {c.current_streak} {plural_days(c.current_streak)})"
                 for c in cs_active
             ) or "нет активных привычек"
 
             ai_text = await get_ai_motivation(
                 f"напиши короткий вдохновляющий комментарий к итогам прошлой недели (1-2 предложения). "
-                f"итоги: {week_pct}% выполнения за {week_total} дней. "
-                f"привычки пользователя: {habit_summary}"
+                f"итоги: {week_pct}% выполнения. привычки: {habit_summary}"
             )
-            full_report = f"📊 <b>итоги недели</b>\n\n{report}\n\n💡 {ai_text}"
+            full_report = (
+                f"📊 <b>итоги недели</b>\n\n"
+                f"{week_success} из {week_total} дней выполнено — <b>{week_pct}%</b>\n"
+                f"{trend}\n\n"
+                f"{report}\n"
+                f"💡 {ai_text}"
+            )
 
             try:
                 await bot.send_message(

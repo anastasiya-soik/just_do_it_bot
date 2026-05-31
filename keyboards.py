@@ -9,15 +9,19 @@ BTN_MY_CHALLENGES = "📊 мой прогресс"
 BTN_NEW_CHALLENGE  = "🎯 новый челлендж"
 BTN_EDIT_HISTORY   = "📝 поправить день"
 BTN_SETTINGS       = "⚙️ настройки"
+BTN_CHECKIN_YESTERDAY = "✅ отметить вчера"
+BTN_ARCHIVE        = "🏆 архив побед"
 
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BTN_MY_CHALLENGES), KeyboardButton(text=BTN_NEW_CHALLENGE)],
-            [KeyboardButton(text=BTN_EDIT_HISTORY),  KeyboardButton(text=BTN_SETTINGS)],
-        ],
-        resize_keyboard=True,
-    )
+def main_menu_keyboard(show_checkin: bool = False, show_archive: bool = False) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=BTN_MY_CHALLENGES), KeyboardButton(text=BTN_NEW_CHALLENGE)],
+        [KeyboardButton(text=BTN_EDIT_HISTORY),  KeyboardButton(text=BTN_SETTINGS)],
+    ]
+    if show_checkin:
+        rows.append([KeyboardButton(text=BTN_CHECKIN_YESTERDAY)])
+    if show_archive:
+        rows.append([KeyboardButton(text=BTN_ARCHIVE)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 def start_date_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
