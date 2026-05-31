@@ -390,21 +390,34 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
             partner_label = f" 👥 {partner_name}"
 
         report += f"<b>{name}</b>{partner_label}\n"
-        if c.current_streak == 0:
-            report += "🗓 только начал 🔥\n"
-        else:
-            streak_line = f"🗓 {c.current_streak} {plural_days(c.current_streak)} подряд"
-            if c.longest_streak > c.current_streak:
-                streak_line += f"  ·  рекорд {c.longest_streak} {plural_days(c.longest_streak)}"
-            report += streak_line + "\n"
-        report += f"✅ {success_count} из {days_in} {plural_days(days_in)}\n"
-        report += f"{heatmap}\n"
-
         if c.target_date:
+            # режим "до даты" — показываем попытку и непрерывность текущей попытки
+            attempt_start = c.attempt_start_date or c.start_date
+            days_in_attempt = max(0, (date.today() - attempt_start).days)
+            attempt_label = f"попытка {c.attempt_number}"
+            if c.current_streak == 0 and days_in_attempt > 0:
+                attempt_label += " ⚠️"
+            report += f"📅 {attempt_label}  ·  {c.current_streak} {plural_days(c.current_streak)} непрерывно\n"
+            if c.best_attempt_streak > 0 and c.attempt_number > 1:
+                report += f"лучшая попытка: {c.best_attempt_streak} {plural_days(c.best_attempt_streak)}\n"
+            report += f"✅ {success_count} из {days_in} {plural_days(days_in)} прошедших\n"
+            report += f"{heatmap}\n"
             full_dist = max(1, (c.target_date - c.start_date).days)
             pct = min(100, max(0, int((date.today() - c.start_date).days / full_dist * 100)))
+            days_left = (c.target_date - date.today()).days
             if pct > 0:
-                report += f"до финиша: {get_progress_bar(pct)}\n"
+                report += f"{get_progress_bar(pct)} осталось {days_left} {plural_days(days_left)}\n"
+        else:
+            # режим "стрик" — без изменений
+            if c.current_streak == 0:
+                report += "🗓 только начал 🔥\n"
+            else:
+                streak_line = f"🗓 {c.current_streak} {plural_days(c.current_streak)} подряд"
+                if c.longest_streak > c.current_streak:
+                    streak_line += f"  ·  рекорд {c.longest_streak} {plural_days(c.longest_streak)}"
+                report += streak_line + "\n"
+            report += f"✅ {success_count} из {days_in} {plural_days(days_in)}\n"
+            report += f"{heatmap}\n"
 
         report += "\n"
         time_label = f"⏰ {c.report_time}" if c.report_time else "⏰ время"
@@ -1678,7 +1691,28 @@ async def save_status(callback: CallbackQuery):
         return
 
     if status == DayStatus.fail:
-        if freeze_count and freeze_count > 0:
+        async with async_session_maker() as session:
+            c_fail = (await session.execute(
+                select(Challenge).where(Challenge.id == int(cid))
+            )).scalar_one()
+            has_target_date = bool(c_fail.target_date)
+
+        if has_target_date:
+            # режим "до даты" — предлагаем продолжить или начать новую попытку
+            kb_rows = []
+            if freeze_count and freeze_count > 0:
+                kb_rows.append([InlineKeyboardButton(
+                    text=f"🧊 спасти цепочку (осталось {freeze_count} {plural(freeze_count, 'заморозка', 'заморозки', 'заморозок')})",
+                    callback_data=f"frz_{cid}_{d_str}"
+                )])
+            kb_rows.append([InlineKeyboardButton(text="🔄 продолжить к финишу", callback_data=f"attempt_continue_{cid}")])
+            kb_rows.append([InlineKeyboardButton(text="🔁 новая попытка", callback_data=f"attempt_restart_{cid}")])
+            await callback.message.answer(
+                "😔 цепочка прервана\n\nможешь продолжить идти к финишу (цепочка прервана, но прогресс сохранится) "
+                "или начать новую попытку — тогда отсчёт непрерывности идёт заново.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
+            )
+        elif freeze_count and freeze_count > 0:
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=f"🧊 спасти стрик (осталось {freeze_count} {plural(freeze_count, 'заморозка', 'заморозки', 'заморозок')})",
@@ -1756,6 +1790,36 @@ async def confirm_fail(callback: CallbackQuery):
         ])
     )
     await callback.answer("завтра новый шанс 💪")
+
+@router.callback_query(F.data.startswith("attempt_continue_"))
+async def attempt_continue(callback: CallbackQuery):
+    cid = int(callback.data.split("_")[2])
+    await callback.message.edit_text(
+        "🔄 продолжаешь идти к финишу — цепочка прервана, но прогресс не потерян.\n"
+        "попытка помечена как «с провалом» — вперёд!"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("attempt_restart_"))
+async def attempt_restart(callback: CallbackQuery):
+    cid = int(callback.data.split("_")[2])
+    async with async_session_maker() as session:
+        c = (await session.execute(
+            select(Challenge).where(Challenge.id == cid)
+        )).scalar_one()
+        # сохраняем лучшую попытку
+        if c.current_streak > c.best_attempt_streak:
+            c.best_attempt_streak = c.current_streak
+        c.attempt_number += 1
+        c.attempt_start_date = date.today()
+        c.current_streak = 0
+        await session.commit()
+
+    await callback.message.edit_text(
+        f"🔁 новая попытка #{c.attempt_number} начата — отсчёт непрерывности идёт заново.\n"
+        f"лучшая попытка: {c.best_attempt_streak} {plural_days(c.best_attempt_streak)} — попробуй побить! 🔥"
+    )
+    await callback.answer()
 
 # ==========================================
 # ЧАСТЬ 6: НАСТРОЙКИ

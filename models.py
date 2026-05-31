@@ -70,9 +70,12 @@ class Challenge(Base):
     partner_challenge_id: Mapped[int | None] = mapped_column(
         ForeignKey("challenges.id", ondelete="SET NULL"), nullable=True
     )
-    custom_name:    Mapped[str | None]      = mapped_column(String(255), nullable=True)
-    custom_emoji:   Mapped[str | None]      = mapped_column(String(255), nullable=True)
-    report_time:    Mapped[str | None]      = mapped_column(String(8), nullable=True)
+    custom_name:         Mapped[str | None]  = mapped_column(String(255), nullable=True)
+    custom_emoji:        Mapped[str | None]  = mapped_column(String(255), nullable=True)
+    report_time:         Mapped[str | None]  = mapped_column(String(8), nullable=True)
+    attempt_number:      Mapped[int]         = mapped_column(Integer, default=1)
+    best_attempt_streak: Mapped[int]         = mapped_column(Integer, default=0)
+    attempt_start_date:  Mapped[date | None] = mapped_column(Date, nullable=True)
 
     user: Mapped["User"]               = relationship(back_populates="challenges")
     days: Mapped[list["ChallengeDay"]] = relationship(
