@@ -525,7 +525,8 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
             report += f"📅 {attempt_label}  ·  {c.current_streak} {plural_days(c.current_streak)} непрерывно\n"
             if c.best_attempt_streak > 0 and c.attempt_number > 1:
                 report += f"лучшая попытка: {c.best_attempt_streak} {plural_days(c.best_attempt_streak)}\n"
-            report += f"✅ {success_count} из {days_in} {plural_days(days_in)} прошедших\n"
+            fail_part = f", {fail_count} {plural(fail_count, 'срыв', 'срыва', 'срывов')}" if fail_count else ""
+            report += f"из {days_in} {plural_days(days_in)} прошедших: {success_count} выполнено{fail_part}\n"
             full_dist = max(1, (c.target_date - c.start_date).days)
             pct = min(100, max(0, int((date.today() - c.start_date).days / full_dist * 100)))
             days_left = (c.target_date - date.today()).days
@@ -540,7 +541,8 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
                 if c.longest_streak > c.current_streak:
                     streak_line += f"  ·  рекорд {c.longest_streak} {plural_days(c.longest_streak)}"
                 report += streak_line + "\n"
-            report += f"✅ {success_count} из {days_in} {plural_days(days_in)}\n"
+            fail_part = f", {fail_count} {plural(fail_count, 'срыв', 'срыва', 'срывов')}" if fail_count else ""
+            report += f"из {days_in} {plural_days(days_in)}: {success_count} выполнено{fail_part}\n"
 
         report += "\n"
         now = date.today()
