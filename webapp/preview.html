@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>just_do_it Мини-апп</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --tg-bg-color: #ffffff;
+      --tg-text-color: #000000;
+      --tg-hint-color: #999999;
+      --tg-accent: #0088cc;
+      --tg-bg-secondary: #f5f5f5;
+      --tg-section-bg: #ffffff;
+      --tg-section-border: #e0e0e0;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --tg-bg-color: #212121;
+        --tg-text-color: #ffffff;
+        --tg-hint-color: #999999;
+        --tg-accent: #5eb3f6;
+        --tg-bg-secondary: #1a1a1a;
+        --tg-section-bg: #2a2a2a;
+        --tg-section-border: #3a3a3a;
+      }
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+      background-color: var(--tg-bg-color);
+      color: var(--tg-text-color);
+    }
+
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      max-width: 500px;
+      margin: 0 auto;
+      background-color: var(--tg-bg-secondary);
+    }
+
+    .app-header {
+      background: linear-gradient(135deg, var(--tg-accent) 0%, #00a6e0 100%);
+      color: white;
+      padding: 20px 16px;
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .app-header h1 {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .app-header .subtitle {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+
+    .app-main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      padding-bottom: 60px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .tab-content {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .stat-card {
+      background: var(--tg-section-bg);
+      border: 1px solid var(--tg-section-border);
+      border-radius: 12px;
+      padding: 16px 12px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--tg-hint-color);
+      font-weight: 500;
+    }
+
+    .challenges-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .challenge-card {
+      background: var(--tg-section-bg);
+      border: 1px solid var(--tg-section-border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .challenge-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 16px;
+    }
+
+    .emoji {
+      font-size: 24px;
+    }
+
+    .challenge-streak {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+    }
+
+    .record {
+      background: rgba(0, 136, 204, 0.1);
+      color: var(--tg-accent);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 6px;
+      background: var(--tg-bg-secondary);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4CAF50, #81C784);
+    }
+
+    .progress-text {
+      font-size: 12px;
+      color: var(--tg-hint-color);
+    }
+
+    .heatmap {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+    }
+
+    .heatmap-cell {
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      background: var(--tg-bg-secondary);
+      border-radius: 6px;
+    }
+
+    .tab-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      max-width: 500px;
+      margin: 0 auto;
+      display: flex;
+      gap: 8px;
+      padding: 8px;
+      background: var(--tg-section-bg);
+      border-top: 1px solid var(--tg-section-border);
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 12px 8px;
+      border: none;
+      border-radius: 8px;
+      background: var(--tg-bg-secondary);
+      color: var(--tg-hint-color);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn.active {
+      background: var(--tg-accent);
+      color: white;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .calendar-header {
+      margin-bottom: 12px;
+    }
+
+    .challenge-select {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid var(--tg-section-border);
+      border-radius: 8px;
+      background: var(--tg-section-bg);
+      color: var(--tg-text-color);
+      font-size: 14px;
+    }
+
+    .month-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      gap: 12px;
+    }
+
+    .nav-btn {
+      background: var(--tg-section-bg);
+      border: 1px solid var(--tg-section-border);
+      color: var(--tg-text-color);
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .month-title {
+      font-size: 16px;
+      font-weight: 600;
+      flex: 1;
+      text-align: center;
+    }
+
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+
+    .day-header {
+      text-align: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--tg-hint-color);
+      padding: 8px 0;
+    }
+
+    .calendar-cell {
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      background: var(--tg-bg-secondary);
+      border-radius: 8px;
+    }
+
+    .calendar-stats {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      padding: 12px;
+      background: var(--tg-section-bg);
+      border-radius: 8px;
+      border: 1px solid var(--tg-section-border);
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <h1>just_do_it</h1>
+      <span class="subtitle">Ваш прогресс</span>
+    </header>
+
+    <main class="app-main">
+      <!-- Dashboard Tab -->
+      <div id="dashboard" class="tab-content">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value">⭐</div>
+            <div class="stat-label">1250 XP</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">🏆</div>
+            <div class="stat-label">5 завершено</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">🧊</div>
+            <div class="stat-label">3 заморозок</div>
+          </div>
+        </div>
+
+        <div class="challenges-list">
+          <!-- Challenge 1 -->
+          <div class="challenge-card">
+            <div class="challenge-name">
+              <span class="emoji">🤪</span>
+              <span>Питание по КБЖ</span>
+            </div>
+            <div class="challenge-streak">
+              <span>🔥 11 дней подряд</span>
+              <span class="record">рекорд 11</span>
+            </div>
+            <div>
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: 91%"></div>
+              </div>
+              <div class="progress-text">из 11 дней: 10 выполнено, 1 срыв</div>
+            </div>
+            <div class="heatmap">
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">😔</div>
+              <div class="heatmap-cell">✅</div>
+            </div>
+          </div>
+
+          <!-- Challenge 2 -->
+          <div class="challenge-card">
+            <div class="challenge-name">
+              <span class="emoji">🍷</span>
+              <span>Алко-пауза</span>
+            </div>
+            <div class="challenge-streak">
+              <span>🔥 4 дня подряд</span>
+              <span class="record">рекорд 7</span>
+            </div>
+            <div>
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: 73%"></div>
+              </div>
+              <div class="progress-text">из 19 дней: 14 выполнено</div>
+            </div>
+            <div class="heatmap">
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">⏭</div>
+              <div class="heatmap-cell">😔</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+            </div>
+          </div>
+
+          <!-- Challenge 3 -->
+          <div class="challenge-card">
+            <div class="challenge-name">
+              <span class="emoji">🍔</span>
+              <span>ПП без РПП</span>
+            </div>
+            <div class="challenge-streak">
+              <span>🔥 9 дней подряд</span>
+            </div>
+            <div>
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: 84%"></div>
+              </div>
+              <div class="progress-text">из 19 дней: 16 выполнено</div>
+            </div>
+            <div class="heatmap">
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+              <div class="heatmap-cell">✅</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Calendar Tab -->
+      <div id="calendar" class="tab-content hidden">
+        <div class="calendar-header">
+          <select class="challenge-select">
+            <option>🤪 Питание по КБЖ</option>
+            <option>🍷 Алко-пауза</option>
+            <option>🍔 ПП без РПП</option>
+          </select>
+        </div>
+
+        <div class="month-nav">
+          <button class="nav-btn">◀</button>
+          <h2 class="month-title">Июнь 2026</h2>
+          <button class="nav-btn">▶</button>
+        </div>
+
+        <div class="calendar-grid">
+          <div class="day-header">Пн</div>
+          <div class="day-header">Вт</div>
+          <div class="day-header">Ср</div>
+          <div class="day-header">Чт</div>
+          <div class="day-header">Пт</div>
+          <div class="day-header">Сб</div>
+          <div class="day-header">Вс</div>
+
+          <div class="calendar-cell">1</div>
+          <div class="calendar-cell">2</div>
+          <div class="calendar-cell">3</div>
+          <div class="calendar-cell">4</div>
+          <div class="calendar-cell">5</div>
+          <div class="calendar-cell">6</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">😔</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">⏭</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+          <div class="calendar-cell">✅</div>
+        </div>
+
+        <div class="calendar-stats">
+          <span>✅ 25</span>
+          <span>😔 1</span>
+          <span>⏭ 1</span>
+        </div>
+      </div>
+    </main>
+
+    <nav class="tab-nav">
+      <button class="tab-btn active" onclick="switchTab('dashboard')">📊 Статистика</button>
+      <button class="tab-btn" onclick="switchTab('calendar')">📅 Календарь</button>
+    </nav>
+  </div>
+
+  <script>
+    function switchTab(tab) {
+      document.getElementById('dashboard').classList.toggle('hidden', tab !== 'dashboard');
+      document.getElementById('calendar').classList.toggle('hidden', tab !== 'calendar');
+
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+      });
+      event.target.classList.add('active');
+    }
+  </script>
+</body>
+</html>
