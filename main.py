@@ -1755,6 +1755,9 @@ async def save_status(callback: CallbackQuery):
     c_type = None
     is_fin = False
     freeze_count = None
+    has_target_date = False
+    consecutive_fails = 0
+    fin_stats = None
 
     async with async_session_maker() as session:
         new_streak = 0
@@ -1807,27 +1810,51 @@ async def save_status(callback: CallbackQuery):
                         'custom_emoji': partner_row[3]
                     })())
 
+        has_target_date = bool(c.target_date)
         is_fin = bool(c.target_date and d == c.target_date and status == DayStatus.success)
         if is_fin:
             c.status = ChallengeStatus.completed
             c.completed_at = date.today()
             await session.commit()
+            total_days = (c.target_date - c.start_date).days + 1
+            success_count = (await session.execute(
+                select(func.count()).where(and_(
+                    ChallengeDay.challenge_id == int(cid),
+                    ChallengeDay.status == DayStatus.success
+                ))
+            )).scalar() or 0
+            fin_stats = (total_days, success_count, new_streak)
 
         if status == DayStatus.success:
             await check_milestone(callback, new_streak, CHALLENGE_NAMES.get(c_type, ""), session)
 
+        if status == DayStatus.fail:
+            recent_fails = (await session.execute(
+                select(ChallengeDay)
+                .where(ChallengeDay.challenge_id == int(cid))
+                .order_by(ChallengeDay.date.desc())
+                .limit(3)
+            )).scalars().all()
+            if len(recent_fails) >= 3 and all(r.status == DayStatus.fail for r in recent_fails):
+                consecutive_fails = 3
+
     # Редактируем исходное сообщение — убираем кнопки, показываем итог
     c_name = CHALLENGE_NAMES.get(c_type, c_type or "")
     date_label = f"{d.day} {MONTH_NAMES_RU[d.month - 1]}"
+    undo_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="↩️ ошибся", callback_data=f"undo_{cid}_{d_str}")
+    ]])
     if status == DayStatus.success:
         await callback.message.edit_text(
             f"✅ <b>{c_name}</b> — {date_label} сделал!",
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
+            reply_markup=undo_kb
         )
     elif status == DayStatus.skip:
         await callback.message.edit_text(
             f"⏭ <b>{c_name}</b> — {date_label} пропущено",
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
+            reply_markup=undo_kb
         )
     else:
         await callback.message.edit_text(
@@ -1848,20 +1875,22 @@ async def save_status(callback: CallbackQuery):
             pass
 
     if is_fin:
-        await callback.message.answer(
-            f"🏆 <b>ПОЗДРАВЛЯЮ!</b> ты дошёл до цели!\n{c_name} завершён",
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_menu_keyboard()
-        )
+        if fin_stats:
+            total_days, success_count, fin_streak = fin_stats
+            rate = round(success_count / total_days * 100) if total_days > 0 else 0
+            text = (
+                f"🏆 <b>ПОБЕДА! ты дошёл до финиша!</b>\n\n"
+                f"<b>{c_name}</b>\n\n"
+                f"📅 {total_days} {plural_days(total_days)} пути\n"
+                f"✅ {success_count} из {total_days} выполнено — <b>{rate}%</b>\n"
+                f"🔥 лучшая серия: {fin_streak} {plural_days(fin_streak)} подряд"
+            )
+        else:
+            text = f"🏆 <b>ПОЗДРАВЛЯЮ!</b> ты дошёл до цели!\n{c_name} завершён"
+        await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
         return
 
     if status == DayStatus.fail:
-        async with async_session_maker() as session:
-            c_fail = (await session.execute(
-                select(Challenge).where(Challenge.id == int(cid))
-            )).scalar_one()
-            has_target_date = bool(c_fail.target_date)
-
         if has_target_date:
             # режим "до даты" — предлагаем продолжить или начать новую попытку
             kb_rows = []
@@ -1897,6 +1926,42 @@ async def save_status(callback: CallbackQuery):
                 "похоже на срыв 😔\n\nзаморозок нет — стрик сбросится.\nможно купить заморозки, чтобы защитить стрик в следующий раз.",
                 reply_markup=kb
             )
+
+        if consecutive_fails >= 3:
+            await callback.message.answer(
+                "3 раза подряд не получилось — и это нормально 💙\n\n"
+                "может, попробовать сделать привычку чуть проще? маленький шаг вперёд лучше, чем долгая остановка."
+            )
+
+@router.callback_query(F.data.startswith("undo_"))
+async def undo_checkin(callback: CallbackQuery):
+    await callback.answer("исправляем 👇")
+    _, cid, d_str = callback.data.split("_", 2)
+    d = datetime.strptime(d_str, "%d.%m.%Y").date()
+
+    async with async_session_maker() as session:
+        day = (await session.execute(
+            select(ChallengeDay).where(and_(
+                ChallengeDay.challenge_id == int(cid),
+                ChallengeDay.date == d
+            ))
+        )).scalar_one_or_none()
+        if day:
+            await session.delete(day)
+            await session.commit()
+            await recalculate_streak(session, int(cid))
+            await session.commit()
+        c = (await session.execute(
+            select(Challenge).where(Challenge.id == int(cid))
+        )).scalar_one_or_none()
+        c_name = get_challenge_name(c) if c else ""
+
+    date_label = f"{d.day} {MONTH_NAMES_RU[d.month - 1]}"
+    await callback.message.edit_text(
+        f"🔔 <b>честный чек</b>, {date_label}\n\n{c_name}",
+        reply_markup=build_check_kb(int(cid), d_str),
+        parse_mode=ParseMode.HTML
+    )
 
 @router.callback_query(F.data.startswith("frz_"))
 async def use_freeze(callback: CallbackQuery):
@@ -2020,13 +2085,43 @@ async def tz_prompt_call(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "set_time_prompt")
 async def set_time_call(callback: CallbackQuery, state: FSMContext):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🌅 9:00",  callback_data="set_time_preset_09:00"),
+            InlineKeyboardButton(text="☀️ 12:00", callback_data="set_time_preset_12:00"),
+            InlineKeyboardButton(text="🌆 21:00", callback_data="set_time_preset_21:00"),
+        ],
+        [InlineKeyboardButton(text="✏️ своё время", callback_data="set_time_custom")],
+        [InlineKeyboardButton(text="❌ отмена",     callback_data="close_settings")],
+    ])
+    await callback.message.answer("выбери время для ежедневных уведомлений 👇", reply_markup=kb)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("set_time_preset_"))
+async def set_time_preset(callback: CallbackQuery):
+    time_str = callback.data.replace("set_time_preset_", "")
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )).scalar_one()
+        u.report_time = time_str
+        u.last_notified_at = None
+        await session.commit()
+    await callback.answer(f"✅ {time_str}")
+    await callback.message.edit_text(
+        f"✅ время обновлено: <code>{time_str}</code>\n\nуведомления начнут приходить в это время уже сегодня",
+        parse_mode=ParseMode.HTML
+    )
+
+@router.callback_query(F.data == "set_time_custom")
+async def set_time_custom(callback: CallbackQuery, state: FSMContext):
     if await state.get_state() == ChallengeState.setting_report_time:
-        return await callback.answer("уже жду время — просто напиши ЧЧ:ММ")
+        return await callback.answer("уже жду — напиши время в формате ЧЧ:ММ")
     kb_cancel = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")
     ]])
     await callback.message.answer(
-        "напиши новое время для ежедневных отчётов (ЧЧ:ММ)\nнапример: <code>21:00</code>",
+        "напиши своё время (ЧЧ:ММ)\nнапример: <code>22:30</code>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb_cancel
     )
