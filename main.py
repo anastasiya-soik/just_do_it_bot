@@ -204,6 +204,95 @@ async def get_heatmap(session, challenge_id: int) -> str:
         else:                             line.append("⬜")
     return "".join(line)
 
+
+async def build_month_view(session, cid: int, year: int, month: int) -> tuple[str, InlineKeyboardMarkup]:
+    import calendar as _cal
+
+    c = (await session.execute(
+        select(Challenge).where(Challenge.id == cid)
+    )).scalar_one_or_none()
+    if not c:
+        return "челлендж не найден", InlineKeyboardMarkup(inline_keyboard=[])
+
+    first_weekday, num_days = _cal.monthrange(year, month)
+    month_start = date(year, month, 1)
+    month_end   = date(year, month, num_days)
+
+    days_res = (await session.execute(
+        select(ChallengeDay).where(and_(
+            ChallengeDay.challenge_id == cid,
+            ChallengeDay.date >= month_start,
+            ChallengeDay.date <= month_end,
+        ))
+    )).scalars().all()
+    days_dict = {d.date: d.status for d in days_res}
+
+    today = date.today()
+    name  = get_challenge_name(c)
+    text  = f"📅 <b>{MONTH_NAMES_NOM[month-1]} {year}</b> — {name}\n\n"
+    text += "Пн  Вт  Ср  Чт  Пт  Сб  Вс\n"
+
+    # leading empty cells
+    cells = ["    "] * first_weekday
+
+    success_n = fail_n = skip_n = 0
+    for day_num in range(1, num_days + 1):
+        d = date(year, month, day_num)
+        if d > today or d < c.start_date:
+            cells.append(" ·  ")
+        else:
+            st = days_dict.get(d)
+            if st == DayStatus.success:
+                cells.append("✅  "); success_n += 1
+            elif st == DayStatus.fail:
+                cells.append("😔  "); fail_n += 1
+            elif st == DayStatus.skip:
+                cells.append("⏭  "); skip_n += 1
+            else:
+                cells.append("⬜  ")
+
+    for i in range(0, len(cells), 7):
+        text += "".join(cells[i:i+7]).rstrip() + "\n"
+
+    parts = []
+    if success_n: parts.append(f"✅ {success_n}")
+    if fail_n:    parts.append(f"😔 {fail_n}")
+    if skip_n:    parts.append(f"⏭ {skip_n}")
+    if parts:
+        text += "\n" + "  ".join(parts)
+
+    # navigation bounds
+    prev_month = month - 1 if month > 1 else 12
+    prev_year  = year if month > 1 else year - 1
+    next_month = month + 1 if month < 12 else 1
+    next_year  = year if month < 12 else year + 1
+
+    _, prev_last = _cal.monthrange(prev_year, prev_month)
+    can_prev = date(prev_year, prev_month, prev_last) >= c.start_date
+    can_next = date(next_year, next_month, 1) <= today
+
+    nav = []
+    nav.append(
+        InlineKeyboardButton(
+            text=f"◀ {MONTH_NAMES_NOM[prev_month-1][:3]}",
+            callback_data=f"cal_{cid}_{prev_year}_{prev_month}"
+        ) if can_prev else
+        InlineKeyboardButton(text=" ", callback_data="noop")
+    )
+    nav.append(
+        InlineKeyboardButton(
+            text=f"{MONTH_NAMES_NOM[next_month-1][:3]} ▶",
+            callback_data=f"cal_{cid}_{next_year}_{next_month}"
+        ) if can_next else
+        InlineKeyboardButton(text=" ", callback_data="noop")
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        nav,
+        [InlineKeyboardButton(text="❌ закрыть", callback_data="close_cal")],
+    ])
+    return text, kb
+
 async def recalculate_streak(session, challenge_id: int) -> int:
     c = (await session.execute(
         select(Challenge).where(Challenge.id == challenge_id)
@@ -296,6 +385,8 @@ def get_status_kb(c_id: int, d_str: str) -> InlineKeyboardMarkup:
 
 MONTH_NAMES_RU = ["января","февраля","марта","апреля","мая","июня",
                   "июля","августа","сентября","октября","ноября","декабря"]
+MONTH_NAMES_NOM = ["Январь","Февраль","Март","Апрель","Май","Июнь",
+                   "Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"]
 
 def quick_kb(*buttons: tuple[str, str]) -> InlineKeyboardMarkup:
     """Быстрая сборка inline-клавиатуры: quick_kb(("текст", "callback"), ...)"""
@@ -411,7 +502,6 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
         days_in = max(1, (date.today() - c.start_date).days + 1)
         total_marked = success_count + fail_count
         pct_done = int(success_count / days_in * 100)
-        heatmap = await get_heatmap(session, c.id)
         name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
 
         partner_label = ""
@@ -436,7 +526,6 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
             if c.best_attempt_streak > 0 and c.attempt_number > 1:
                 report += f"лучшая попытка: {c.best_attempt_streak} {plural_days(c.best_attempt_streak)}\n"
             report += f"✅ {success_count} из {days_in} {plural_days(days_in)} прошедших\n"
-            report += f"{heatmap}\n"
             full_dist = max(1, (c.target_date - c.start_date).days)
             pct = min(100, max(0, int((date.today() - c.start_date).days / full_dist * 100)))
             days_left = (c.target_date - date.today()).days
@@ -452,10 +541,16 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
                     streak_line += f"  ·  рекорд {c.longest_streak} {plural_days(c.longest_streak)}"
                 report += streak_line + "\n"
             report += f"✅ {success_count} из {days_in} {plural_days(days_in)}\n"
-            report += f"{heatmap}\n"
 
         report += "\n"
+        now = date.today()
         time_label = f"⏰ {c.report_time}" if c.report_time else "⏰ время"
+        kb_delete.inline_keyboard.append([
+            InlineKeyboardButton(
+                text="📅 история дней",
+                callback_data=f"cal_{c.id}_{now.year}_{now.month}"
+            )
+        ])
         kb_delete.inline_keyboard.append([
             InlineKeyboardButton(text=time_label, callback_data=f"set_ctime_{c.id}"),
             InlineKeyboardButton(text=f"🗑 отменить {name}", callback_data=f"drop_{c.id}")
@@ -1962,6 +2057,20 @@ async def undo_checkin(callback: CallbackQuery):
         reply_markup=build_check_kb(int(cid), d_str),
         parse_mode=ParseMode.HTML
     )
+
+@router.callback_query(F.data.startswith("cal_"))
+async def show_calendar(callback: CallbackQuery):
+    await callback.answer()
+    parts = callback.data.split("_")
+    cid, year, month = int(parts[1]), int(parts[2]), int(parts[3])
+    async with async_session_maker() as session:
+        text, kb = await build_month_view(session, cid, year, month)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data == "close_cal")
+async def close_calendar(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.delete()
 
 @router.callback_query(F.data.startswith("frz_"))
 async def use_freeze(callback: CallbackQuery):
