@@ -1818,7 +1818,7 @@ async def save_status(callback: CallbackQuery):
             await session.commit()
             total_days = (c.target_date - c.start_date).days + 1
             success_count = (await session.execute(
-                select(func.count()).where(and_(
+                select(func.count(ChallengeDay.id)).where(and_(
                     ChallengeDay.challenge_id == int(cid),
                     ChallengeDay.status == DayStatus.success
                 ))
