@@ -61,11 +61,13 @@ _ai_futures: dict[str, asyncio.Future] = {}
 
 # --- МОНИТОРИНГ ---
 if SENTRY_DSN:
+    from sentry_sdk.integrations.asyncio import AsyncioIntegration
     sentry_sdk.init(
         dsn=SENTRY_DSN,
         traces_sample_rate=1.0,
         profiles_sample_rate=1.0,
-        send_default_pii=True
+        send_default_pii=True,
+        integrations=[AsyncioIntegration()],
     )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -486,9 +488,12 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
 
 @router.errors()
 async def error_handler(event: ErrorEvent, bot: Bot):
-    logger.exception(f"необработанная ошибка: {event.exception}")
+    logger.exception(f"необработанная ошибка: {event.exception}", exc_info=event.exception)
     if SENTRY_DSN:
-        sentry_sdk.capture_exception(event.exception)
+        try:
+            raise event.exception
+        except Exception:
+            sentry_sdk.capture_exception()
     try:
         if event.update.message:
             chat_id = event.update.message.chat.id
@@ -1704,8 +1709,16 @@ async def ed_process(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("save_"))
 async def save_status(callback: CallbackQuery):
-    _, cid, d_str, status = callback.data.split("_")
+    _, cid, d_str, status = callback.data.split("_", 3)
     d = datetime.strptime(d_str, "%d.%m.%Y").date()
+
+    # Answer immediately so Telegram removes the loading spinner right away
+    if status == DayStatus.success:
+        await callback.answer("🔥 засчитано!")
+    elif status == DayStatus.skip:
+        await callback.answer("день пропущен")
+    else:
+        await callback.answer("бывает, не сдавайся 💙")
 
     c_type = None
     is_fin = False
@@ -1722,7 +1735,7 @@ async def save_status(callback: CallbackQuery):
         day = res_d.scalar_one_or_none()
 
         if day and day.status == status:
-            return await callback.answer("уже записано")
+            return  # already answered at top of handler
 
         if status == DayStatus.fail:
             u = (await session.execute(
@@ -1773,24 +1786,22 @@ async def save_status(callback: CallbackQuery):
 
     # Редактируем исходное сообщение — убираем кнопки, показываем итог
     c_name = CHALLENGE_NAMES.get(c_type, c_type or "")
+    date_label = f"{d.day} {MONTH_NAMES_RU[d.month - 1]}"
     if status == DayStatus.success:
         await callback.message.edit_text(
-            f"✅ <b>{c_name}</b> — сделал!",
+            f"✅ <b>{c_name}</b> — {date_label} сделал!",
             parse_mode=ParseMode.HTML
         )
-        await callback.answer("🔥 засчитано!")
     elif status == DayStatus.skip:
         await callback.message.edit_text(
-            f"⏭ <b>{c_name}</b> — пропущено",
+            f"⏭ <b>{c_name}</b> — {date_label} пропущено",
             parse_mode=ParseMode.HTML
         )
-        await callback.answer("день пропущен")
     else:
         await callback.message.edit_text(
-            f"😔 <b>{c_name}</b> — не вышло",
+            f"😔 <b>{c_name}</b> — {date_label} не вышло",
             parse_mode=ParseMode.HTML
         )
-        await callback.answer("бывает, не сдавайся 💙")
 
     # уведомляем партнёра о срыве
     if partner_tg_id:
@@ -2113,7 +2124,8 @@ async def close_kb(callback: CallbackQuery, state: FSMContext):
 # ==========================================
 
 async def _send_checks_for_day(
-    bot: Bot, session, u, target_date: date, *, label_prefix: str = "честный чек на сегодня"
+    bot: Bot, session, u, target_date: date, *, label_prefix: str = "честный чек на сегодня",
+    redis=None
 ) -> bool:
     """Отправляет чек-кнопки по всем незаполненным активным челленджам за target_date.
     Возвращает True, если хотя бы одно сообщение было отправлено."""
@@ -2132,6 +2144,11 @@ async def _send_checks_for_day(
     date_label = f"{target_date.day} {MONTH_NAMES_RU[target_date.month - 1]}"
     sent       = False
     for c in cs:
+        # Skip if the daily scheduler already sent a check for this challenge+date
+        if redis:
+            already_sent_key = f"notif_c:{c.id}:{target_date.isoformat()}"
+            if await redis.exists(already_sent_key):
+                continue
         day_rec = (await session.execute(
             select(ChallengeDay).where(and_(
                 ChallengeDay.challenge_id == c.id,
@@ -2223,23 +2240,25 @@ async def daily_task(bot: Bot):
 
                 await _send_checks_for_day(
                     bot, session, u, past_day,
-                    label_prefix=f"пропущенный чек за"
+                    label_prefix=f"пропущенный чек за",
+                    redis=_redis,
                 )
                 # Помечаем день как обработанный независимо от результата
                 await _redis.setex(redis_key, 9 * 24 * 3600, "1")
 
 async def auto_skip_task():
-    #Запускается каждую минуту. Для пользователей у кого сейчас местная полночь — закрывает вчерашний день по политике (skip или fail). ИСПРАВЛЕНО (v2 баг): в v2 была попытка вычислить (now_utc.hour + User.utc_offset) % 24 прямо в SQL WHERE — это сравнение Python-int с SQLAlchemy-Column, что даёт TypeError. Теперь фильтр по utc_offset != None, а проверка local_hour == 0 делается в Python.
     async with async_session_maker() as session:
-        now_utc   = datetime.now(timezone.utc)
-        yesterday = date.today() - timedelta(days=1)
+        now_utc = datetime.now(timezone.utc)
 
         res = await session.execute(select(User))
         for u in res.scalars():
             offset     = u.utc_offset if u.utc_offset is not None else 0
-            local_hour = (now_utc.hour + offset) % 24
+            local_t    = now_utc + timedelta(hours=offset)
+            local_hour = local_t.hour
             if local_hour != 0:
                 continue
+            # "yesterday" is computed from the user's local date, not UTC date
+            yesterday = local_t.date() - timedelta(days=1)
 
             cs = (await session.execute(
                 select(Challenge).where(and_(
