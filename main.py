@@ -508,6 +508,38 @@ async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("действие отменено", reply_markup=main_menu_keyboard())
 
+@router.message(Command("feedback"))
+async def cmd_feedback(message: Message, state: FSMContext):
+    await state.set_state(ChallengeState.waiting_for_feedback)
+    await message.answer(
+        "💬 напиши что случилось — нашёл баг, что-то работает не так, или просто есть идея.\n\n"
+        "одно сообщение — и оно сразу улетит разработчику ✈️\n\n"
+        "<i>(или /cancel чтобы отменить)</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+@router.message(StateFilter(ChallengeState.waiting_for_feedback))
+async def receive_feedback(message: Message, state: FSMContext, bot: Bot):
+    await state.clear()
+    if not ADMIN_ID:
+        await message.answer("спасибо! обратная связь пока не настроена 🙏")
+        return
+
+    sender = message.from_user
+    name = sender.full_name or sender.username or str(sender.id)
+    username_part = f" (@{sender.username})" if sender.username else ""
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"📩 <b>фидбэк от пользователя</b>\n\n"
+            f"👤 {name}{username_part} [<code>{sender.id}</code>]\n\n"
+            f"{message.text or '(без текста)'}",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        pass
+    await message.answer("спасибо, передали! постараемся разобраться 🙏")
+
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(
