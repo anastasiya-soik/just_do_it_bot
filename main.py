@@ -61,11 +61,13 @@ _ai_futures: dict[str, asyncio.Future] = {}
 
 # --- МОНИТОРИНГ ---
 if SENTRY_DSN:
+    from sentry_sdk.integrations.asyncio import AsyncioIntegration
     sentry_sdk.init(
         dsn=SENTRY_DSN,
         traces_sample_rate=1.0,
         profiles_sample_rate=1.0,
-        send_default_pii=True
+        send_default_pii=True,
+        integrations=[AsyncioIntegration()],
     )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -202,6 +204,95 @@ async def get_heatmap(session, challenge_id: int) -> str:
         else:                             line.append("⬜")
     return "".join(line)
 
+
+async def build_month_view(session, cid: int, year: int, month: int) -> tuple[str, InlineKeyboardMarkup]:
+    import calendar as _cal
+
+    c = (await session.execute(
+        select(Challenge).where(Challenge.id == cid)
+    )).scalar_one_or_none()
+    if not c:
+        return "челлендж не найден", InlineKeyboardMarkup(inline_keyboard=[])
+
+    first_weekday, num_days = _cal.monthrange(year, month)
+    month_start = date(year, month, 1)
+    month_end   = date(year, month, num_days)
+
+    days_res = (await session.execute(
+        select(ChallengeDay).where(and_(
+            ChallengeDay.challenge_id == cid,
+            ChallengeDay.date >= month_start,
+            ChallengeDay.date <= month_end,
+        ))
+    )).scalars().all()
+    days_dict = {d.date: d.status for d in days_res}
+
+    today = date.today()
+    name  = get_challenge_name(c)
+    text  = f"📅 <b>{MONTH_NAMES_NOM[month-1]} {year}</b> — {name}\n\n"
+    text += "Пн  Вт  Ср  Чт  Пт  Сб  Вс\n"
+
+    # leading empty cells
+    cells = ["    "] * first_weekday
+
+    success_n = fail_n = skip_n = 0
+    for day_num in range(1, num_days + 1):
+        d = date(year, month, day_num)
+        if d > today or d < c.start_date:
+            cells.append(" ·  ")
+        else:
+            st = days_dict.get(d)
+            if st == DayStatus.success:
+                cells.append("✅  "); success_n += 1
+            elif st == DayStatus.fail:
+                cells.append("😔  "); fail_n += 1
+            elif st == DayStatus.skip:
+                cells.append("⏭  "); skip_n += 1
+            else:
+                cells.append("⬜  ")
+
+    for i in range(0, len(cells), 7):
+        text += "".join(cells[i:i+7]).rstrip() + "\n"
+
+    parts = []
+    if success_n: parts.append(f"✅ {success_n}")
+    if fail_n:    parts.append(f"😔 {fail_n}")
+    if skip_n:    parts.append(f"⏭ {skip_n}")
+    if parts:
+        text += "\n" + "  ".join(parts)
+
+    # navigation bounds
+    prev_month = month - 1 if month > 1 else 12
+    prev_year  = year if month > 1 else year - 1
+    next_month = month + 1 if month < 12 else 1
+    next_year  = year if month < 12 else year + 1
+
+    _, prev_last = _cal.monthrange(prev_year, prev_month)
+    can_prev = date(prev_year, prev_month, prev_last) >= c.start_date
+    can_next = date(next_year, next_month, 1) <= today
+
+    nav = []
+    nav.append(
+        InlineKeyboardButton(
+            text=f"◀ {MONTH_NAMES_NOM[prev_month-1][:3]}",
+            callback_data=f"cal_{cid}_{prev_year}_{prev_month}"
+        ) if can_prev else
+        InlineKeyboardButton(text=" ", callback_data="noop")
+    )
+    nav.append(
+        InlineKeyboardButton(
+            text=f"{MONTH_NAMES_NOM[next_month-1][:3]} ▶",
+            callback_data=f"cal_{cid}_{next_year}_{next_month}"
+        ) if can_next else
+        InlineKeyboardButton(text=" ", callback_data="noop")
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        nav,
+        [InlineKeyboardButton(text="❌ закрыть", callback_data="close_cal")],
+    ])
+    return text, kb
+
 async def recalculate_streak(session, challenge_id: int) -> int:
     c = (await session.execute(
         select(Challenge).where(Challenge.id == challenge_id)
@@ -294,6 +385,8 @@ def get_status_kb(c_id: int, d_str: str) -> InlineKeyboardMarkup:
 
 MONTH_NAMES_RU = ["января","февраля","марта","апреля","мая","июня",
                   "июля","августа","сентября","октября","ноября","декабря"]
+MONTH_NAMES_NOM = ["Январь","Февраль","Март","Апрель","Май","Июнь",
+                   "Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"]
 
 def quick_kb(*buttons: tuple[str, str]) -> InlineKeyboardMarkup:
     """Быстрая сборка inline-клавиатуры: quick_kb(("текст", "callback"), ...)"""
@@ -409,7 +502,6 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
         days_in = max(1, (date.today() - c.start_date).days + 1)
         total_marked = success_count + fail_count
         pct_done = int(success_count / days_in * 100)
-        heatmap = await get_heatmap(session, c.id)
         name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
 
         partner_label = ""
@@ -434,7 +526,6 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
             if c.best_attempt_streak > 0 and c.attempt_number > 1:
                 report += f"лучшая попытка: {c.best_attempt_streak} {plural_days(c.best_attempt_streak)}\n"
             report += f"✅ {success_count} из {days_in} {plural_days(days_in)} прошедших\n"
-            report += f"{heatmap}\n"
             full_dist = max(1, (c.target_date - c.start_date).days)
             pct = min(100, max(0, int((date.today() - c.start_date).days / full_dist * 100)))
             days_left = (c.target_date - date.today()).days
@@ -450,10 +541,16 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
                     streak_line += f"  ·  рекорд {c.longest_streak} {plural_days(c.longest_streak)}"
                 report += streak_line + "\n"
             report += f"✅ {success_count} из {days_in} {plural_days(days_in)}\n"
-            report += f"{heatmap}\n"
 
         report += "\n"
+        now = date.today()
         time_label = f"⏰ {c.report_time}" if c.report_time else "⏰ время"
+        kb_delete.inline_keyboard.append([
+            InlineKeyboardButton(
+                text="📅 история дней",
+                callback_data=f"cal_{c.id}_{now.year}_{now.month}"
+            )
+        ])
         kb_delete.inline_keyboard.append([
             InlineKeyboardButton(text=time_label, callback_data=f"set_ctime_{c.id}"),
             InlineKeyboardButton(text=f"🗑 отменить {name}", callback_data=f"drop_{c.id}")
@@ -486,9 +583,12 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
 
 @router.errors()
 async def error_handler(event: ErrorEvent, bot: Bot):
-    logger.exception(f"необработанная ошибка: {event.exception}")
+    logger.exception(f"необработанная ошибка: {event.exception}", exc_info=event.exception)
     if SENTRY_DSN:
-        sentry_sdk.capture_exception(event.exception)
+        try:
+            raise event.exception
+        except Exception:
+            sentry_sdk.capture_exception()
     try:
         if event.update.message:
             chat_id = event.update.message.chat.id
@@ -502,6 +602,38 @@ async def error_handler(event: ErrorEvent, bot: Bot):
 async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("действие отменено", reply_markup=main_menu_keyboard())
+
+@router.message(Command("feedback"))
+async def cmd_feedback(message: Message, state: FSMContext):
+    await state.set_state(ChallengeState.waiting_for_feedback)
+    await message.answer(
+        "💬 напиши что случилось — нашёл баг, что-то работает не так, или просто есть идея.\n\n"
+        "одно сообщение — и оно сразу улетит разработчику ✈️\n\n"
+        "<i>(или /cancel чтобы отменить)</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+@router.message(StateFilter(ChallengeState.waiting_for_feedback))
+async def receive_feedback(message: Message, state: FSMContext, bot: Bot):
+    await state.clear()
+    if not ADMIN_ID:
+        await message.answer("спасибо! обратная связь пока не настроена 🙏")
+        return
+
+    sender = message.from_user
+    name = sender.full_name or sender.username or str(sender.id)
+    username_part = f" (@{sender.username})" if sender.username else ""
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"📩 <b>фидбэк от пользователя</b>\n\n"
+            f"👤 {name}{username_part} [<code>{sender.id}</code>]\n\n"
+            f"{message.text or '(без текста)'}",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        pass
+    await message.answer("спасибо, передали! постараемся разобраться 🙏")
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
@@ -1704,12 +1836,23 @@ async def ed_process(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("save_"))
 async def save_status(callback: CallbackQuery):
-    _, cid, d_str, status = callback.data.split("_")
+    _, cid, d_str, status = callback.data.split("_", 3)
     d = datetime.strptime(d_str, "%d.%m.%Y").date()
+
+    # Answer immediately so Telegram removes the loading spinner right away
+    if status == DayStatus.success:
+        await callback.answer("🔥 засчитано!")
+    elif status == DayStatus.skip:
+        await callback.answer("день пропущен")
+    else:
+        await callback.answer("бывает, не сдавайся 💙")
 
     c_type = None
     is_fin = False
     freeze_count = None
+    has_target_date = False
+    consecutive_fails = 0
+    fin_stats = None
 
     async with async_session_maker() as session:
         new_streak = 0
@@ -1722,7 +1865,7 @@ async def save_status(callback: CallbackQuery):
         day = res_d.scalar_one_or_none()
 
         if day and day.status == status:
-            return await callback.answer("уже записано")
+            return  # already answered at top of handler
 
         if status == DayStatus.fail:
             u = (await session.execute(
@@ -1762,35 +1905,57 @@ async def save_status(callback: CallbackQuery):
                         'custom_emoji': partner_row[3]
                     })())
 
+        has_target_date = bool(c.target_date)
         is_fin = bool(c.target_date and d == c.target_date and status == DayStatus.success)
         if is_fin:
             c.status = ChallengeStatus.completed
             c.completed_at = date.today()
             await session.commit()
+            total_days = (c.target_date - c.start_date).days + 1
+            success_count = (await session.execute(
+                select(func.count(ChallengeDay.id)).where(and_(
+                    ChallengeDay.challenge_id == int(cid),
+                    ChallengeDay.status == DayStatus.success
+                ))
+            )).scalar() or 0
+            fin_stats = (total_days, success_count, new_streak)
 
         if status == DayStatus.success:
             await check_milestone(callback, new_streak, CHALLENGE_NAMES.get(c_type, ""), session)
 
+        if status == DayStatus.fail:
+            recent_fails = (await session.execute(
+                select(ChallengeDay)
+                .where(ChallengeDay.challenge_id == int(cid))
+                .order_by(ChallengeDay.date.desc())
+                .limit(3)
+            )).scalars().all()
+            if len(recent_fails) >= 3 and all(r.status == DayStatus.fail for r in recent_fails):
+                consecutive_fails = 3
+
     # Редактируем исходное сообщение — убираем кнопки, показываем итог
     c_name = CHALLENGE_NAMES.get(c_type, c_type or "")
+    date_label = f"{d.day} {MONTH_NAMES_RU[d.month - 1]}"
+    undo_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="↩️ ошибся", callback_data=f"undo_{cid}_{d_str}")
+    ]])
     if status == DayStatus.success:
         await callback.message.edit_text(
-            f"✅ <b>{c_name}</b> — сделал!",
-            parse_mode=ParseMode.HTML
+            f"✅ <b>{c_name}</b> — {date_label} сделал!",
+            parse_mode=ParseMode.HTML,
+            reply_markup=undo_kb
         )
-        await callback.answer("🔥 засчитано!")
     elif status == DayStatus.skip:
         await callback.message.edit_text(
-            f"⏭ <b>{c_name}</b> — пропущено",
-            parse_mode=ParseMode.HTML
+            f"⏭ <b>{c_name}</b> — {date_label} пропущено",
+            parse_mode=ParseMode.HTML,
+            reply_markup=undo_kb
         )
-        await callback.answer("день пропущен")
     else:
         await callback.message.edit_text(
-            f"😔 <b>{c_name}</b> — не вышло",
+            f"😔 <b>{c_name}</b> — {date_label} не вышло",
             parse_mode=ParseMode.HTML
         )
-        await callback.answer("бывает, не сдавайся 💙")
 
     # уведомляем партнёра о срыве
     if partner_tg_id:
@@ -1805,20 +1970,22 @@ async def save_status(callback: CallbackQuery):
             pass
 
     if is_fin:
-        await callback.message.answer(
-            f"🏆 <b>ПОЗДРАВЛЯЮ!</b> ты дошёл до цели!\n{c_name} завершён",
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_menu_keyboard()
-        )
+        if fin_stats:
+            total_days, success_count, fin_streak = fin_stats
+            rate = round(success_count / total_days * 100) if total_days > 0 else 0
+            text = (
+                f"🏆 <b>ПОБЕДА! ты дошёл до финиша!</b>\n\n"
+                f"<b>{c_name}</b>\n\n"
+                f"📅 {total_days} {plural_days(total_days)} пути\n"
+                f"✅ {success_count} из {total_days} выполнено — <b>{rate}%</b>\n"
+                f"🔥 лучшая серия: {fin_streak} {plural_days(fin_streak)} подряд"
+            )
+        else:
+            text = f"🏆 <b>ПОЗДРАВЛЯЮ!</b> ты дошёл до цели!\n{c_name} завершён"
+        await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
         return
 
     if status == DayStatus.fail:
-        async with async_session_maker() as session:
-            c_fail = (await session.execute(
-                select(Challenge).where(Challenge.id == int(cid))
-            )).scalar_one()
-            has_target_date = bool(c_fail.target_date)
-
         if has_target_date:
             # режим "до даты" — предлагаем продолжить или начать новую попытку
             kb_rows = []
@@ -1854,6 +2021,56 @@ async def save_status(callback: CallbackQuery):
                 "похоже на срыв 😔\n\nзаморозок нет — стрик сбросится.\nможно купить заморозки, чтобы защитить стрик в следующий раз.",
                 reply_markup=kb
             )
+
+        if consecutive_fails >= 3:
+            await callback.message.answer(
+                "3 раза подряд не получилось — и это нормально 💙\n\n"
+                "может, попробовать сделать привычку чуть проще? маленький шаг вперёд лучше, чем долгая остановка."
+            )
+
+@router.callback_query(F.data.startswith("undo_"))
+async def undo_checkin(callback: CallbackQuery):
+    await callback.answer("исправляем 👇")
+    _, cid, d_str = callback.data.split("_", 2)
+    d = datetime.strptime(d_str, "%d.%m.%Y").date()
+
+    async with async_session_maker() as session:
+        day = (await session.execute(
+            select(ChallengeDay).where(and_(
+                ChallengeDay.challenge_id == int(cid),
+                ChallengeDay.date == d
+            ))
+        )).scalar_one_or_none()
+        if day:
+            await session.delete(day)
+            await session.commit()
+            await recalculate_streak(session, int(cid))
+            await session.commit()
+        c = (await session.execute(
+            select(Challenge).where(Challenge.id == int(cid))
+        )).scalar_one_or_none()
+        c_name = get_challenge_name(c) if c else ""
+
+    date_label = f"{d.day} {MONTH_NAMES_RU[d.month - 1]}"
+    await callback.message.edit_text(
+        f"🔔 <b>честный чек</b>, {date_label}\n\n{c_name}",
+        reply_markup=build_check_kb(int(cid), d_str),
+        parse_mode=ParseMode.HTML
+    )
+
+@router.callback_query(F.data.startswith("cal_"))
+async def show_calendar(callback: CallbackQuery):
+    await callback.answer()
+    parts = callback.data.split("_")
+    cid, year, month = int(parts[1]), int(parts[2]), int(parts[3])
+    async with async_session_maker() as session:
+        text, kb = await build_month_view(session, cid, year, month)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data == "close_cal")
+async def close_calendar(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.delete()
 
 @router.callback_query(F.data.startswith("frz_"))
 async def use_freeze(callback: CallbackQuery):
@@ -1977,13 +2194,43 @@ async def tz_prompt_call(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "set_time_prompt")
 async def set_time_call(callback: CallbackQuery, state: FSMContext):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🌅 9:00",  callback_data="set_time_preset_09:00"),
+            InlineKeyboardButton(text="☀️ 12:00", callback_data="set_time_preset_12:00"),
+            InlineKeyboardButton(text="🌆 21:00", callback_data="set_time_preset_21:00"),
+        ],
+        [InlineKeyboardButton(text="✏️ своё время", callback_data="set_time_custom")],
+        [InlineKeyboardButton(text="❌ отмена",     callback_data="close_settings")],
+    ])
+    await callback.message.answer("выбери время для ежедневных уведомлений 👇", reply_markup=kb)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("set_time_preset_"))
+async def set_time_preset(callback: CallbackQuery):
+    time_str = callback.data.replace("set_time_preset_", "")
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )).scalar_one()
+        u.report_time = time_str
+        u.last_notified_at = None
+        await session.commit()
+    await callback.answer(f"✅ {time_str}")
+    await callback.message.edit_text(
+        f"✅ время обновлено: <code>{time_str}</code>\n\nуведомления начнут приходить в это время уже сегодня",
+        parse_mode=ParseMode.HTML
+    )
+
+@router.callback_query(F.data == "set_time_custom")
+async def set_time_custom(callback: CallbackQuery, state: FSMContext):
     if await state.get_state() == ChallengeState.setting_report_time:
-        return await callback.answer("уже жду время — просто напиши ЧЧ:ММ")
+        return await callback.answer("уже жду — напиши время в формате ЧЧ:ММ")
     kb_cancel = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="❌ отмена", callback_data="close_settings")
     ]])
     await callback.message.answer(
-        "напиши новое время для ежедневных отчётов (ЧЧ:ММ)\nнапример: <code>21:00</code>",
+        "напиши своё время (ЧЧ:ММ)\nнапример: <code>22:30</code>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb_cancel
     )
@@ -2113,7 +2360,8 @@ async def close_kb(callback: CallbackQuery, state: FSMContext):
 # ==========================================
 
 async def _send_checks_for_day(
-    bot: Bot, session, u, target_date: date, *, label_prefix: str = "честный чек на сегодня"
+    bot: Bot, session, u, target_date: date, *, label_prefix: str = "честный чек на сегодня",
+    redis=None
 ) -> bool:
     """Отправляет чек-кнопки по всем незаполненным активным челленджам за target_date.
     Возвращает True, если хотя бы одно сообщение было отправлено."""
@@ -2132,6 +2380,11 @@ async def _send_checks_for_day(
     date_label = f"{target_date.day} {MONTH_NAMES_RU[target_date.month - 1]}"
     sent       = False
     for c in cs:
+        # Skip if the daily scheduler already sent a check for this challenge+date
+        if redis:
+            already_sent_key = f"notif_c:{c.id}:{target_date.isoformat()}"
+            if await redis.exists(already_sent_key):
+                continue
         day_rec = (await session.execute(
             select(ChallengeDay).where(and_(
                 ChallengeDay.challenge_id == c.id,
@@ -2223,23 +2476,25 @@ async def daily_task(bot: Bot):
 
                 await _send_checks_for_day(
                     bot, session, u, past_day,
-                    label_prefix=f"пропущенный чек за"
+                    label_prefix=f"пропущенный чек за",
+                    redis=_redis,
                 )
                 # Помечаем день как обработанный независимо от результата
                 await _redis.setex(redis_key, 9 * 24 * 3600, "1")
 
 async def auto_skip_task():
-    #Запускается каждую минуту. Для пользователей у кого сейчас местная полночь — закрывает вчерашний день по политике (skip или fail). ИСПРАВЛЕНО (v2 баг): в v2 была попытка вычислить (now_utc.hour + User.utc_offset) % 24 прямо в SQL WHERE — это сравнение Python-int с SQLAlchemy-Column, что даёт TypeError. Теперь фильтр по utc_offset != None, а проверка local_hour == 0 делается в Python.
     async with async_session_maker() as session:
-        now_utc   = datetime.now(timezone.utc)
-        yesterday = date.today() - timedelta(days=1)
+        now_utc = datetime.now(timezone.utc)
 
         res = await session.execute(select(User))
         for u in res.scalars():
             offset     = u.utc_offset if u.utc_offset is not None else 0
-            local_hour = (now_utc.hour + offset) % 24
+            local_t    = now_utc + timedelta(hours=offset)
+            local_hour = local_t.hour
             if local_hour != 0:
                 continue
+            # "yesterday" is computed from the user's local date, not UTC date
+            yesterday = local_t.date() - timedelta(days=1)
 
             cs = (await session.execute(
                 select(Challenge).where(and_(

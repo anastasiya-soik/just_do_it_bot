@@ -28,7 +28,7 @@ class User(Base):
     telegram_id:      Mapped[int]        = mapped_column(BigInteger, unique=True, index=True)
     username:         Mapped[str | None] = mapped_column(String(255), nullable=True)
     utc_offset:       Mapped[int | None] = mapped_column(Integer, nullable=True)
-    report_time:      Mapped[str]        = mapped_column(String(8), default="21:00")
+    report_time:      Mapped[str]        = mapped_column(String(8), default="12:00")
     silent_mode:      Mapped[bool]       = mapped_column(Boolean, default=False)
 
     # Явный Enum вместо String — SQLAlchemy валидирует значения на уровне ORM

@@ -60,10 +60,11 @@ async def set_main_menu(bot: Bot, admin_id: int = 0) -> None:
     from aiogram.types import BotCommandScopeDefault, BotCommandScopeChat
 
     user_commands = [
-        BotCommand(command="/start",  description="меню"),
-        BotCommand(command="/help",   description="как пользоваться"),
-        BotCommand(command="/faq",    description="частые вопросы"),
-        BotCommand(command="/cancel", description="отмена"),
+        BotCommand(command="/start",    description="меню"),
+        BotCommand(command="/help",     description="как пользоваться"),
+        BotCommand(command="/faq",      description="частые вопросы"),
+        BotCommand(command="/feedback", description="сообщить о баге или идее"),
+        BotCommand(command="/cancel",   description="отмена"),
     ]
     admin_commands = user_commands + [
         BotCommand(command="/broadcast",    description="рассылка"),
