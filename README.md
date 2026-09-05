@@ -1,17 +1,18 @@
-# just do it — telegram habit tracker
+# 🎯 just do it — telegram habit tracker
 
 ![Python](https://img.shields.io/badge/Python-3.13-blue)
 ![aiogram](https://img.shields.io/badge/aiogram-3.x-green)
 ![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0-red)
 ![Deployed](https://img.shields.io/badge/Deployed-Railway-purple)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-telegram-бот для отказа от вредных привычек: сахар, фастфуд, алкоголь, никотин, шортсы — или любой свой челлендж.
+> Telegram-бот для отказа от вредных привычек: сахар, фастфуд, алкоголь, никотин, шортсы — или любой свой челлендж.
 
-👉 **попробовать:** [t.me/just_never_do_it_bot](https://t.me/just_never_do_it_bot)
+**Бот:** [t.me/just_never_do_it_bot](https://t.me/just_never_do_it_bot)
 
 ---
 
-## фичи
+## Возможности
 
 - **ежедневный чек** — отдельное сообщение на каждый челлендж с кнопками «победа ✅» / «срыв 😔»
 - **заморозки** — спасают стрик при срыве. копятся автоматически за стрики 7/14/30/60/100 дней, можно купить за ⭐️
@@ -24,21 +25,21 @@ telegram-бот для отказа от вредных привычек: сах
 
 ---
 
-## стек
+## Стек
 
-| слой | технологии |
+| Слой | Технологии |
 |---|---|
-| bot framework | aiogram 3.x, FSM через RedisStorage |
-| database | SQLite + SQLAlchemy 2.0 async (aiosqlite) |
-| ai | google gemini 2.5 flash lite (`gemini-2.5-flash-lite`), asyncio.Queue rate limiter |
-| payments | telegram stars (`currency="XTR"`) |
-| scheduling | APScheduler — чеки, auto-skip, еженедельная статистика |
-| infra | docker, railway.app (sqlite volume mount) |
-| observability | sentry SDK |
+| Bot framework | aiogram 3.x, FSM через RedisStorage |
+| Database | SQLite + SQLAlchemy 2.0 async (aiosqlite) |
+| AI | Google Gemini 2.5 Flash Lite (`gemini-2.5-flash-lite`), asyncio.Queue rate limiter |
+| Payments | Telegram Stars (`currency="XTR"`) |
+| Scheduling | APScheduler — чеки, auto-skip, еженедельная статистика |
+| Инфраструктура | Docker, Railway.app (SQLite volume mount) |
+| Мониторинг | Sentry |
 
 ---
 
-## архитектура
+## Архитектура
 
 ```
 main.py          — все хендлеры, FSM, фоновые задачи, middleware
@@ -58,37 +59,25 @@ tests/           — unit-тесты чистых функций (pytest)
 
 ---
 
-## запуск локально
+## Запуск локально
 
 ```bash
-git clone https://github.com/madamsloika/just_do_it_bot.git
+git clone https://github.com/anastasiya-soik/just_do_it_bot.git
 cd just_do_it_bot
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-создай `.env`:
-```
-BOT_TOKEN=токен_от_BotFather
-ADMIN_ID=твой_telegram_id
-REDIS_URL=redis://localhost:6379              # опционально, по умолчанию redis://localhost:6379
-GEMINI_API_KEY=ключ_из_aistudio.google.com   # опционально
-SENTRY_DSN=https://...                        # опционально
-DATA_DIR=./data                               # опционально, по умолчанию ./data/
-```
-
-```bash
+cp .env.example .env   # заполни BOT_TOKEN, ADMIN_ID и остальное — см. таблицу ниже
 python main.py
 ```
 
-### docker
+### Docker
 
 ```bash
 docker build -t just_do_it_bot .
 docker run --env-file .env -v $(pwd)/data:/data just_do_it_bot
 ```
 
-### тесты
+### Тесты
 
 ```bash
 python -m pytest tests/ -v
@@ -96,6 +85,33 @@ python -m pytest tests/ -v
 
 ---
 
-## деплой
+## Деплой
 
-railway.app — автодеплой из main ветки. sqlite хранится в volume примонтированном в `DATA_DIR=/data`.
+Railway.app — автодеплой из `main` ветки. SQLite хранится в volume, примонтированном в `DATA_DIR=/data`.
+
+---
+
+## Переменные окружения
+
+| Переменная | Описание |
+|---|---|
+| `BOT_TOKEN` | Токен от BotFather |
+| `ADMIN_ID` | Твой Telegram ID |
+| `REDIS_URL` | Опционально, по умолчанию `redis://localhost:6379` |
+| `GEMINI_API_KEY` | Опционально — ключ из aistudio.google.com |
+| `SENTRY_DSN` | Опционально — трекинг ошибок |
+| `DATA_DIR` | Опционально, по умолчанию `./data/` |
+
+---
+
+## Об авторе
+
+Я проджект-менеджер, которая увлеклась разработкой и AI — делаю pet-проекты для себя в формате vibe coding: придумываю идею, итерирую с AI и смотрю, что получается.
+
+just do it — один из таких проектов, другой — [purrse](https://github.com/anastasiya-soik/budget-app), трекер финансов с Telegram Mini App. Если форкаешь — звёздочку в карму :)
+
+---
+
+## Лицензия
+
+MIT
