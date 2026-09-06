@@ -1,83 +1,53 @@
-# 🎯 just do it — telegram habit tracker
+# 🎯 just do it — Habit Tracker Bot
 
-![Python](https://img.shields.io/badge/Python-3.13-blue)
-![aiogram](https://img.shields.io/badge/aiogram-3.x-green)
-![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0-red)
-![Deployed](https://img.shields.io/badge/Deployed-Railway-purple)
-![License](https://img.shields.io/badge/License-MIT-lightgrey)
+Telegram bot for breaking bad habits. Track streaks, get AI coaching, earn stars.
 
-> Telegram-бот для отказа от вредных привычек: сахар, фастфуд, алкоголь, никотин, шортсы — или любой свой челлендж.
-
-**Бот:** [t.me/just_never_do_it_bot](https://t.me/just_never_do_it_bot)
+[Bot](https://t.me/just_never_do_it_bot)
 
 ---
 
-## Возможности
+## Features
 
-- **ежедневный чек** — отдельное сообщение на каждый челлендж с кнопками «победа ✅» / «срыв 😔»
-- **заморозки** — спасают стрик при срыве. копятся автоматически за стрики 7/14/30/60/100 дней, можно купить за ⭐️
-- **AI-коуч** — google gemini генерирует короткие живые ответы: при победах, срывах, в итогах недели. очередь запросов защищает от спама к api
-- **геймификация** — XP за каждый день, 5 рангов, прогресс-бар, тепловая карта последних 7 дней
-- **парный челлендж** (премиум) — общий стрик с другом через deep link: оба должны отметиться
-- **редактор истории** — поправить любой прошедший день задним числом
-- **еженедельная сводка** — автоматически в понедельник с AI-комментарием
-- **монетизация** — telegram stars: кастомные челленджи (100 ⭐️), заморозки (15/30 ⭐️)
-
----
-
-## Стек
-
-| Слой | Технологии |
-|---|---|
-| Bot framework | aiogram 3.x, FSM через RedisStorage |
-| Database | SQLite + SQLAlchemy 2.0 async (aiosqlite) |
-| AI | Google Gemini 2.5 Flash Lite (`gemini-2.5-flash-lite`), asyncio.Queue rate limiter |
-| Payments | Telegram Stars (`currency="XTR"`) |
-| Scheduling | APScheduler — чеки, auto-skip, еженедельная статистика |
-| Инфраструктура | Docker, Railway.app (SQLite volume mount) |
-| Мониторинг | Sentry |
+- Daily check-ins with win/fail buttons
+- Streak tracking (7/14/30/60/100 day milestones)
+- Freezes (lives) to save streaks when you slip
+- AI coach (Google Gemini) responds with encouragement
+- Weekly digest with AI commentary
+- Gamification: XP, ranks, heatmap of last 7 days
+- Telegram Stars for premium (custom challenges, extra freezes)
+- History editor (fix past days)
 
 ---
 
-## Архитектура
+## Tech
 
-```
-main.py          — все хендлеры, FSM, фоновые задачи, middleware
-models.py        — User → Challenge → ChallengeDay (cascade delete)
-database.py      — async engine + session factory
-keyboards.py     — inline/reply keyboard builders
-states.py        — FSM states (ChallengeState)
-tests/           — unit-тесты чистых функций (pytest)
-```
-
-**ключевые решения:**
-- `EnsureUserMiddleware` — auto-создаёт User при первом контакте
-- idempotency фоновых задач через флаги в БД (`last_notified_at`, `last_weekly_stats_at`)
-- timezone без библиотек — UTC offset вычисляется из текущего часа пользователя при онбординге
-- AI-очередь через Redis list (`brpop`) — не более 1 запроса к gemini каждые 0.5с, фолбэк на статичные советы при переполнении
-- миграции через `ALTER TABLE IF NOT EXISTS` в `init_db()` — без alembic
+**Bot:** aiogram 3, FSM via Redis  
+**Database:** SQLAlchemy 2 (async), SQLite  
+**AI:** Google Gemini 2.5 Flash Lite  
+**Scheduling:** APScheduler for checks/stats  
+**Deploy:** Railway (SQLite on volume)
 
 ---
 
-## Запуск локально
+## Setup
 
 ```bash
 git clone https://github.com/anastasiya-soik/just_do_it_bot.git
 cd just_do_it_bot
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # заполни BOT_TOKEN, ADMIN_ID и остальное — см. таблицу ниже
+cp .env.example .env
 python main.py
 ```
 
-### Docker
+## Docker
 
 ```bash
 docker build -t just_do_it_bot .
 docker run --env-file .env -v $(pwd)/data:/data just_do_it_bot
 ```
 
-### Тесты
+## Test
 
 ```bash
 python -m pytest tests/ -v
@@ -85,33 +55,112 @@ python -m pytest tests/ -v
 
 ---
 
+## Env Vars
+
+```
+BOT_TOKEN=<from-botfather>
+ADMIN_ID=<your-telegram-id>
+REDIS_URL=redis://localhost:6379 (optional)
+GEMINI_API_KEY=<from-aistudio.google.com> (optional)
+SENTRY_DSN=<optional>
+DATA_DIR=./data/ (optional)
+```
+
+---
+
+## Deploy
+
+Auto-deploy from `main` branch to Railway. SQLite stored in volume.
+
+---
+
+## About
+
+Testing gamification + AI coaching for habit forming. One of my experiments. Star if useful! ⭐
+
+License: MIT
+
+---
+---
+
+# 🎯 just do it — Трекер привычек
+
+Telegram бот для отказа от вредных привычек. Стрики, AI-коуч, Telegram Stars.
+
+[Бот](https://t.me/just_never_do_it_bot)
+
+---
+
+## Что умеет
+
+- Ежедневные чеки с кнопками «победа» / «срыв»
+- Отслеживание стриков (вехи 7/14/30/60/100 дней)
+- Заморозки (жизни) для спасения стрика при срыве
+- AI-коуч (Google Gemini) с поддерживающими ответами
+- Еженедельная сводка с AI-комментарием
+- Геймификация: XP, ранги, тепловая карта за 7 дней
+- Telegram Stars для премиума (свои челленджи, доп заморозки)
+- Редактор истории (переправить прошедший день)
+
+---
+
+## Стек
+
+**Бот:** aiogram 3, FSM через Redis  
+**БД:** SQLAlchemy 2 (async), SQLite  
+**AI:** Google Gemini 2.5 Flash Lite  
+**Планировщик:** APScheduler для чеков/статистики  
+**Деплой:** Railway (SQLite на volume)
+
+---
+
+## Запуск
+
+```bash
+git clone https://github.com/anastasiya-soik/just_do_it_bot.git
+cd just_do_it_bot
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python main.py
+```
+
+## Docker
+
+```bash
+docker build -t just_do_it_bot .
+docker run --env-file .env -v $(pwd)/data:/data just_do_it_bot
+```
+
+## Тесты
+
+```bash
+python -m pytest tests/ -v
+```
+
+---
+
+## Переменные
+
+```
+BOT_TOKEN=<от-botfather>
+ADMIN_ID=<твой-telegram-id>
+REDIS_URL=redis://localhost:6379 (опционально)
+GEMINI_API_KEY=<из-aistudio.google.com> (опционально)
+SENTRY_DSN=<опционально>
+DATA_DIR=./data/ (опционально)
+```
+
+---
+
 ## Деплой
 
-Railway.app — автодеплой из `main` ветки. SQLite хранится в volume, примонтированном в `DATA_DIR=/data`.
+Auto-deploy из branch `main` в Railway. SQLite хранится на volume.
 
 ---
 
-## Переменные окружения
+## О проекте
 
-| Переменная | Описание |
-|---|---|
-| `BOT_TOKEN` | Токен от BotFather |
-| `ADMIN_ID` | Твой Telegram ID |
-| `REDIS_URL` | Опционально, по умолчанию `redis://localhost:6379` |
-| `GEMINI_API_KEY` | Опционально — ключ из aistudio.google.com |
-| `SENTRY_DSN` | Опционально — трекинг ошибок |
-| `DATA_DIR` | Опционально, по умолчанию `./data/` |
+Тестирую геймификацию + AI-коуч для формирования привычек. Один из экспериментов. Звёздочку если помогает! ⭐
 
----
-
-## Об авторе
-
-Я проджект-менеджер, которая увлеклась разработкой и AI — делаю pet-проекты для себя в формате vibe coding: придумываю идею, итерирую с AI и смотрю, что получается.
-
-just do it — один из таких проектов, другой — [purrse](https://github.com/anastasiya-soik/budget-app), трекер финансов с Telegram Mini App. Если форкаешь — звёздочку в карму :)
-
----
-
-## Лицензия
-
-MIT
+Лицензия: MIT
