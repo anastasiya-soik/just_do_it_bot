@@ -113,6 +113,8 @@ def get_challenge_name(c) -> str:
         return f"{c.custom_emoji or '🎯'} {c.custom_name or 'свой челлендж'}"
     return CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
 
+MAX_EMOJI_LEN = 10  # защита от вставки десятков эмодзи подряд (см. clamp_challenge_type)
+
 def extract_emoji(message: Message) -> str:
     import unicodedata
     text = (message.text or "").strip()
@@ -120,6 +122,8 @@ def extract_emoji(message: Message) -> str:
         return ""
     result = ""
     for char in text:
+        if len(result) >= MAX_EMOJI_LEN:
+            break
         if (unicodedata.category(char) in ("So", "Sm")
                 or ord(char) > 0x2600
                 or char in ("️", "‍", "⃣")
@@ -128,6 +132,13 @@ def extract_emoji(message: Message) -> str:
         else:
             break
     return result
+
+# Challenge.challenge_type — VARCHAR(50); кастомные челленджи хранят туда "эмодзи + имя"
+CHALLENGE_TYPE_MAX_LEN = 50
+
+def clamp_challenge_type(text: str) -> str:
+    """Гарантирует, что итоговая строка помещается в колонку challenge_type."""
+    return text[:CHALLENGE_TYPE_MAX_LEN]
 
 # Стрики за которые начисляется заморозка
 FREEZE_MILESTONES = {7, 14, 30, 60, 100}
@@ -502,7 +513,7 @@ async def build_stats_text(session, user) -> tuple[str, InlineKeyboardMarkup]:
         days_in = max(1, (date.today() - c.start_date).days + 1)
         total_marked = success_count + fail_count
         pct_done = int(success_count / days_in * 100)
-        name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+        name = get_challenge_name(c)
 
         partner_label = ""
         if c.partner_challenge_id:
@@ -878,7 +889,7 @@ async def cmd_start(message: Message, state: FSMContext):
                 a_user = (await session.execute(
                     select(User).where(User.id == a_challenge.user_id)
                 )).scalar_one()
-            name = CHALLENGE_NAMES.get(a_challenge.challenge_type, a_challenge.challenge_type)
+            name = get_challenge_name(a_challenge)
             partner_name = a_user.username or str(a_user.telegram_id)
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="✅ принять вызов!", callback_data=f"partner_accept_{token}")],
@@ -1411,9 +1422,7 @@ async def process_partner_custom_name(message: Message, state: FSMContext):
 async def receive_partner_custom_emoji(message: Message, state: FSMContext, bot: Bot):
     data  = await state.get_data()
     name  = data.get("partner_custom_name", "")
-    emoji = (message.text or "").strip()
-    if emoji:
-        emoji = emoji[0]
+    emoji = extract_emoji(message)
     full_name = f"{emoji} {name}" if emoji else name
     await _create_partner_challenge_from_msg(message, state, bot, full_name)
 
@@ -1427,7 +1436,7 @@ async def _create_partner_challenge(callback: CallbackQuery, state: FSMContext, 
         u = (await session.execute(
             select(User).where(User.telegram_id == callback.from_user.id)
         )).scalar_one()
-        c = Challenge(user_id=u.id, challenge_type=name, start_date=date.today())
+        c = Challenge(user_id=u.id, challenge_type=clamp_challenge_type(name), start_date=date.today())
         session.add(c)
         await session.flush()
         session.add(PartnerInvite(token=token, challenge_id=c.id, created_at=date.today()))
@@ -1450,7 +1459,7 @@ async def _create_partner_challenge_from_msg(message: Message, state: FSMContext
         u = (await session.execute(
             select(User).where(User.telegram_id == message.from_user.id)
         )).scalar_one()
-        c = Challenge(user_id=u.id, challenge_type=full_name, start_date=date.today())
+        c = Challenge(user_id=u.id, challenge_type=clamp_challenge_type(full_name), start_date=date.today())
         session.add(c)
         await session.flush()
         session.add(PartnerInvite(token=token, challenge_id=c.id, created_at=date.today()))
@@ -1532,7 +1541,7 @@ async def accept_partner_challenge(callback: CallbackQuery):
         await session.delete(invite)
         await session.commit()
 
-    name = CHALLENGE_NAMES.get(a_challenge.challenge_type, a_challenge.challenge_type)
+    name = get_challenge_name(a_challenge)
     partner_name = a_user.username or str(a_user.telegram_id)
     await callback.message.edit_text(
         f"🤝 <b>принято!</b>\n\n"
@@ -1667,7 +1676,7 @@ async def save_streak_mode(callback: CallbackQuery, state: FSMContext):
         u = (await session.execute(
             select(User).where(User.telegram_id == callback.from_user.id)
         )).scalar_one()
-        c = Challenge(user_id=u.id, challenge_type=type_to_save, start_date=start_date)
+        c = Challenge(user_id=u.id, challenge_type=clamp_challenge_type(type_to_save), start_date=start_date)
         session.add(c)
         await session.flush()  # Получаем c.id до commit
 
@@ -1730,7 +1739,7 @@ async def save_deadline_mode(message: Message, state: FSMContext):
             )).scalar_one()
             c = Challenge(
                 user_id=u.id,
-                challenge_type=type_to_save,
+                challenge_type=clamp_challenge_type(type_to_save),
                 start_date=start_date,
                 target_date=t_date
             )
@@ -1784,7 +1793,7 @@ async def edit_history_start(message: Message, state: FSMContext):
             return await message.answer("сначала запусти челлендж")
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type),
+                text=get_challenge_name(c),
                 callback_data=f"ed_{c.id}"
             )]
             for c in cs
@@ -1849,7 +1858,6 @@ async def save_status(callback: CallbackQuery):
     else:
         await callback.answer("бывает, не сдавайся 💙")
 
-    c_type = None
     is_fin = False
     freeze_count = None
     has_target_date = False
@@ -1887,7 +1895,6 @@ async def save_status(callback: CallbackQuery):
         c = (await session.execute(
             select(Challenge).where(Challenge.id == int(cid))
         )).scalar_one()
-        c_type = c.challenge_type
         partner_tg_id = None
         partner_c_name = None
         if c.partner_challenge_id:
@@ -1923,7 +1930,7 @@ async def save_status(callback: CallbackQuery):
             fin_stats = (total_days, success_count, new_streak)
 
         if status == DayStatus.success:
-            await check_milestone(callback, new_streak, CHALLENGE_NAMES.get(c_type, ""), session)
+            await check_milestone(callback, new_streak, get_challenge_name(c), session)
 
         if status == DayStatus.fail:
             recent_fails = (await session.execute(
@@ -1936,7 +1943,7 @@ async def save_status(callback: CallbackQuery):
                 consecutive_fails = 3
 
     # Редактируем исходное сообщение — убираем кнопки, показываем итог
-    c_name = CHALLENGE_NAMES.get(c_type, c_type or "")
+    c_name = get_challenge_name(c)
     date_label = f"{d.day} {MONTH_NAMES_RU[d.month - 1]}"
     undo_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="↩️ ошибся", callback_data=f"undo_{cid}_{d_str}")
@@ -2082,6 +2089,8 @@ async def use_freeze(callback: CallbackQuery):
         u = (await session.execute(
             select(User).join(Challenge).where(Challenge.id == int(cid))
         )).scalar_one()
+        if u.freeze_count <= 0:
+            return await callback.answer("заморозки закончились 🧊", show_alert=True)
         u.freeze_count -= 1
 
         res_d = await session.execute(
@@ -2394,7 +2403,7 @@ async def _send_checks_for_day(
             ))
         )).scalar_one_or_none()
         if not day_rec:
-            name = CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+            name = get_challenge_name(c)
             try:
                 await bot.send_message(
                     u.telegram_id,
@@ -2548,7 +2557,7 @@ async def motivation_task(bot: Bot):
                 continue
 
             habits = ", ".join(
-                CHALLENGE_NAMES.get(c.challenge_type, c.challenge_type)
+                get_challenge_name(c)
                 + f" ({c.current_streak} {plural_days(c.current_streak)} подряд)"
                 for c in cs
             )

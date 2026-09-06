@@ -22,10 +22,10 @@ Telegram bot for breaking bad habits. Track streaks, get AI coaching, earn stars
 ## Tech
 
 **Bot:** aiogram 3, FSM via Redis  
-**Database:** SQLAlchemy 2 (async), SQLite  
+**Database:** SQLAlchemy 2 (async), PostgreSQL  
 **AI:** Google Gemini 2.5 Flash Lite  
 **Scheduling:** APScheduler for checks/stats  
-**Deploy:** Railway (SQLite on volume)
+**Deploy:** Railway
 
 ---
 
@@ -44,7 +44,7 @@ python main.py
 
 ```bash
 docker build -t just_do_it_bot .
-docker run --env-file .env -v $(pwd)/data:/data just_do_it_bot
+docker run --env-file .env just_do_it_bot
 ```
 
 ## Test
@@ -60,17 +60,17 @@ python -m pytest tests/ -v
 ```
 BOT_TOKEN=<from-botfather>
 ADMIN_ID=<your-telegram-id>
+DATABASE_URL=postgresql://user:password@host:5432/dbname
 REDIS_URL=redis://localhost:6379 (optional)
 GEMINI_API_KEY=<from-aistudio.google.com> (optional)
 SENTRY_DSN=<optional>
-DATA_DIR=./data/ (optional)
 ```
 
 ---
 
 ## Deploy
 
-Auto-deploy from `main` branch to Railway. SQLite stored in volume.
+Auto-deploy from `main` branch to Railway. Requires a PostgreSQL database (`DATABASE_URL`).
 
 ---
 
@@ -107,10 +107,10 @@ Telegram бот для отказа от вредных привычек. Стр
 ## Стек
 
 **Бот:** aiogram 3, FSM через Redis  
-**БД:** SQLAlchemy 2 (async), SQLite  
+**БД:** SQLAlchemy 2 (async), PostgreSQL  
 **AI:** Google Gemini 2.5 Flash Lite  
 **Планировщик:** APScheduler для чеков/статистики  
-**Деплой:** Railway (SQLite на volume)
+**Деплой:** Railway
 
 ---
 
@@ -129,7 +129,7 @@ python main.py
 
 ```bash
 docker build -t just_do_it_bot .
-docker run --env-file .env -v $(pwd)/data:/data just_do_it_bot
+docker run --env-file .env just_do_it_bot
 ```
 
 ## Тесты
@@ -145,17 +145,17 @@ python -m pytest tests/ -v
 ```
 BOT_TOKEN=<от-botfather>
 ADMIN_ID=<твой-telegram-id>
+DATABASE_URL=postgresql://user:password@host:5432/dbname
 REDIS_URL=redis://localhost:6379 (опционально)
 GEMINI_API_KEY=<из-aistudio.google.com> (опционально)
 SENTRY_DSN=<опционально>
-DATA_DIR=./data/ (опционально)
 ```
 
 ---
 
 ## Деплой
 
-Auto-deploy из branch `main` в Railway. SQLite хранится на volume.
+Auto-deploy из branch `main` в Railway. Нужна база PostgreSQL (`DATABASE_URL`).
 
 ---
 

@@ -128,6 +128,29 @@ def test_extract_emoji_multiple_emoji_takes_all_leading():
     assert "😎" in result
     assert "привет" not in result
 
+def test_extract_emoji_capped_to_max_len():
+    # защита от вставки десятков эмодзи подряд — иначе challenge_type (VARCHAR(50)) переполнится
+    result = m.extract_emoji(_msg("😀" * 30 + " текст"))
+    assert len(result) == m.MAX_EMOJI_LEN
+
+
+# ── clamp_challenge_type ────────────────────────────────────────────────────────
+
+def test_clamp_challenge_type_short_untouched():
+    assert m.clamp_challenge_type("🎯 привычка") == "🎯 привычка"
+
+def test_clamp_challenge_type_truncates_to_column_limit():
+    long_name = "🎯" + "а" * 60
+    result = m.clamp_challenge_type(long_name)
+    assert len(result) == m.CHALLENGE_TYPE_MAX_LEN
+
+def test_emoji_plus_name_always_fits_challenge_type_column():
+    # emoji (<= MAX_EMOJI_LEN) + пробел + имя (<= 30) должно помещаться без обрезки
+    emoji = m.extract_emoji(_msg("😀" * 30))
+    name = "а" * 30
+    combo = m.clamp_challenge_type(f"{emoji} {name}")
+    assert len(combo) <= m.CHALLENGE_TYPE_MAX_LEN
+
 
 # ── get_challenge_name ────────────────────────────────────────────────────────
 
