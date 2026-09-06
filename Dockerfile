@@ -14,7 +14,4 @@ RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Создаем папку data
-RUN mkdir -p /data
-
 CMD ["python", "main.py"]
