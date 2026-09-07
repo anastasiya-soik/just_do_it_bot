@@ -23,3 +23,11 @@ async def init_db() -> None:
                 await conn.execute(text(f"ALTER TABLE challenges ADD COLUMN IF NOT EXISTS {col}"))
             except Exception:
                 pass
+        for col in (
+            "voice_sample VARCHAR(300)",
+            "last_fun_fact_at DATE",
+        ):
+            try:
+                await conn.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col}"))
+            except Exception:
+                pass

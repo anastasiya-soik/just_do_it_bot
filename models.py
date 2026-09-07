@@ -39,7 +39,12 @@ class User(Base):
     last_notified_at:    Mapped[date | None] = mapped_column(Date, nullable=True)
     last_weekly_stats_at:  Mapped[date | None] = mapped_column(Date, nullable=True)
     last_motivation_at:    Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_fun_fact_at:      Mapped[date | None] = mapped_column(Date, nullable=True)
     xp:               Mapped[int]         = mapped_column(Integer, default=0)
+
+    # короткий образец того, как пользователь сам пишет боту (см. fallback_echo) —
+    # используется чтобы AI-реплики звучали в его манере, а не одинаково для всех
+    voice_sample: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     # default=0: первая заморозка выдаётся за стрик 7 дней через check_milestone,
     # не авансом при регистрации

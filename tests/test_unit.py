@@ -187,6 +187,29 @@ def test_challenge_name_unknown_type_returns_type():
     assert m.get_challenge_name(c) == "unknown_type"
 
 
+# ── voice_hint ────────────────────────────────────────────────────────────────
+
+def _user(voice_sample=None):
+    u = MagicMock()
+    u.voice_sample = voice_sample
+    return u
+
+def test_voice_hint_empty_when_no_sample():
+    assert m.voice_hint(_user(None)) == ""
+
+def test_voice_hint_empty_when_blank_sample():
+    assert m.voice_hint(_user("")) == ""
+
+def test_voice_hint_includes_sample_text():
+    hint = m.voice_hint(_user("го погнали, я в деле"))
+    assert "го погнали, я в деле" in hint
+
+def test_voice_hint_missing_attribute_is_safe():
+    # объект без voice_sample вообще (getattr с дефолтом) не должен падать
+    class NoVoice: pass
+    assert m.voice_hint(NoVoice()) == ""
+
+
 # ── Premium — константы и логика ──────────────────────────────────────────────
 
 def test_stars_custom_price_is_100():
