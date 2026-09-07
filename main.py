@@ -430,25 +430,43 @@ async def _ai_worker(redis: "redis.asyncio.Redis"):
                     future.set_result(result)
             await asyncio.sleep(0.5)
 
-async def _call_gemini(prompt: str) -> str:
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        resp = await client.post(
-            GEMINI_URL,
-            params={"key": GEMINI_API_KEY},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"maxOutputTokens": 120, "temperature": 0.7},
-                "systemInstruction": {"parts": [{"text": AI_SYSTEM_PROMPT}]},
-            }
-        )
+async def _call_gemini(
+    prompt: str, *,
+    system_prompt: str = AI_SYSTEM_PROMPT,
+    grounded: bool = False,
+    clean: bool = True,
+    max_tokens: int = 120,
+    timeout: float = 8.0,
+) -> str:
+    """grounded=True подключает Google Search — модель может отвечать чем-то свежим,
+    а не только тем, что знала на момент обучения (нужно для факта дня)."""
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7},
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+    }
+    if grounded:
+        payload["tools"] = [{"google_search": {}}]
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(GEMINI_URL, params={"key": GEMINI_API_KEY}, json=payload)
         data = resp.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        # убираем точку в конце на случай если модель всё же поставила
-        # убираем точку/многоточие в конце и заглавную первую букву
-        text = text.rstrip(" .…")
-        if text:
-            text = text[0].lower() + text[1:]
+        if clean:
+            # убираем точку/многоточие в конце и заглавную первую букву —
+            # чтобы реплика органично подхватывала интонацию нашего текста
+            text = text.rstrip(" .…")
+            if text:
+                text = text[0].lower() + text[1:]
         return text
+
+def voice_hint(u) -> str:
+    """Короткая подсказка модели, как обычно пишет этот пользователь — чтобы AI
+    звучал в его манере, а не одинаково для всех. Заполняется из его же сообщений
+    боту (см. fallback_echo)."""
+    sample = getattr(u, "voice_sample", None)
+    if not sample:
+        return ""
+    return f" человек обычно пишет так: «{sample}» — не копируй дословно, но подстройся под его манеру."
 
 async def get_ai_motivation(context: str) -> str:
     if not GEMINI_API_KEY or _redis is None:
@@ -466,6 +484,45 @@ async def get_ai_motivation(context: str) -> str:
         return await asyncio.wait_for(future, timeout=12.0)
     except Exception:
         return random.choice(TIPS)
+
+FUN_FACT_SYSTEM_PROMPT = (
+    "Ты — бот, который раз в день присылает пользователю один свежий, забавный или "
+    "удивительный факт либо шутку — что-то живое из интернета, а не избитую классику. "
+    "Используй поиск, чтобы по возможности зацепить что-то актуальное — новость, "
+    "тренд, случай за последние дни или недели. "
+    "Пиши по-русски, живо, без канцелярита и без вступлений вроде «а знаете ли вы». "
+    "1-3 предложения. Если не уверен в достоверности факта — выбери более безопасный "
+    "и точно проверенный, не выдумывай."
+)
+
+FUN_FACTS_FALLBACK = [
+    "осьминоги пробуют вкус лапами — рецепторы у них прямо на присосках 🐙",
+    "мёд практически не портится: археологи находили в гробницах съедобный мёд возрастом больше 3000 лет 🍯",
+    "бананы — это ягоды с ботанической точки зрения, а клубника и малина — нет 🍓",
+    "у улитки около 14 000 зубов, и все они находятся на языке 🐌",
+    "самое короткое авиасообщение в мире длится меньше 2 минут — рейс между двумя шотландскими островами ✈️",
+    "человеческое сердце за сутки перекачивает столько крови, что ей можно было бы заполнить цистерну грузовика 🚚",
+]
+
+async def get_fun_fact(context: str = "") -> str:
+    """Отдельный (не через очередь) вызов AI с поиском — раз в день на пользователя,
+    поэтому нет смысла делить с быстрой очередью мотивационных реплик."""
+    if not GEMINI_API_KEY:
+        return random.choice(FUN_FACTS_FALLBACK)
+    prompt = "пришли один свежий забавный факт или шутку из интернета на сегодня."
+    if context:
+        prompt += f" {context}"
+    try:
+        return await _call_gemini(
+            prompt,
+            system_prompt=FUN_FACT_SYSTEM_PROMPT,
+            grounded=True,
+            clean=False,
+            max_tokens=150,
+            timeout=15.0,
+        )
+    except Exception:
+        return random.choice(FUN_FACTS_FALLBACK)
 
 def build_check_kb(cid: int, d_str: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
@@ -681,8 +738,9 @@ async def cmd_help(message: Message):
         "<b>⚙️ настройки</b>\n"
         "время уведомлений, часовой пояс, режим пропущенных дней, покупка заморозок\n\n"
 
-        "📊 статистика за неделю приходит автоматически каждый понедельник в 10:00\n"
-        "💡 мотивация от AI — по средам и воскресеньям в 12:00\n\n"
+        "📊 статистика за неделю приходит автоматически каждое воскресенье в 20:00\n"
+        "💡 мотивация от AI — по средам и воскресеньям в 12:00\n"
+        "🎲 факт дня — свежая штука из интернета каждое утро в 10:00\n\n"
         "/cancel — отменить любое действие\n"
         "/faq — частые вопросы и советы по мотивации",
         parse_mode=ParseMode.HTML,
@@ -2404,10 +2462,15 @@ async def _send_checks_for_day(
         )).scalar_one_or_none()
         if not day_rec:
             name = get_challenge_name(c)
+            nudge = await get_ai_motivation(
+                f"человек забыл отметить привычку «{name}» за {date_label} — это пропущенный, "
+                f"не сегодняшний день. мягко и по-дружески напомни об этом одной фразой, "
+                f"без чувства вины и нравоучений.{voice_hint(u)}"
+            )
             try:
                 await bot.send_message(
                     u.telegram_id,
-                    f"🔔 <b>{label_prefix}</b>, {date_label}\n\n{name}",
+                    f"🔔 <b>{label_prefix}</b>, {date_label}\n\n{name}\n\n💬 {nudge}",
                     reply_markup=build_check_kb(c.id, d_str),
                     disable_notification=u.silent_mode,
                     parse_mode=ParseMode.HTML
@@ -2456,10 +2519,16 @@ async def daily_task(bot: Bot):
                         name = get_challenge_name(c)
                         d_str = user_today.strftime("%d.%m.%Y")
                         date_label = f"{user_today.day} {MONTH_NAMES_RU[user_today.month - 1]}"
+                        nudge = await get_ai_motivation(
+                            f"пора отметить сегодня привычку «{name}», текущий стрик "
+                            f"{c.current_streak} {plural_days(c.current_streak)} подряд. "
+                            f"напиши короткую дружескую фразу-напоминание отметиться сегодня."
+                            f"{voice_hint(u)}"
+                        )
                         try:
                             await bot.send_message(
                                 u.telegram_id,
-                                f"🔔 <b>честный чек на сегодня</b>, {date_label}\n\n{name}",
+                                f"🔔 <b>честный чек на сегодня</b>, {date_label}\n\n{name}\n\n💬 {nudge}",
                                 reply_markup=build_check_kb(c.id, d_str),
                                 disable_notification=u.silent_mode,
                                 parse_mode=ParseMode.HTML
@@ -2565,7 +2634,8 @@ async def motivation_task(bot: Bot):
             context = (
                 f"напиши короткое мотивационное сообщение (1-2 предложения). "
                 f"контекст: {'середина недели' if is_midweek else 'конец недели, воскресенье'}. "
-                f"активные привычки пользователя: {habits}"
+                f"активные привычки пользователя: {habits}."
+                f"{voice_hint(u)}"
             )
             tip = await get_ai_motivation(context)
 
@@ -2637,7 +2707,8 @@ async def weekly_stats_task(bot: Bot):
 
             ai_text = await get_ai_motivation(
                 f"напиши короткий вдохновляющий комментарий к итогам прошлой недели (1-2 предложения). "
-                f"итоги: {week_pct}% выполнения. привычки: {habit_summary}"
+                f"итоги: {week_pct}% выполнения. привычки: {habit_summary}."
+                f"{voice_hint(u)}"
             )
             full_report = (
                 f"📊 <b>итоги недели</b>\n\n"
@@ -2655,6 +2726,38 @@ async def weekly_stats_task(bot: Bot):
                     disable_notification=u.silent_mode
                 )
                 u.last_weekly_stats_at = user_today
+                await session.commit()
+            except Exception:
+                pass
+
+async def daily_fun_fact_task(bot: Bot):
+    """Раз в день, в 10:00 по локальному времени пользователя — свежий факт или
+    шутка из интернета (не привязано к челленджам, просто приятная мелочь)."""
+    FUN_FACT_HOUR = 10
+    async with async_session_maker() as session:
+        now_utc = datetime.now(timezone.utc)
+        res = await session.execute(select(User))
+        for u in res.scalars():
+            if u.utc_offset is None:
+                continue  # ещё не прошёл онбординг
+            offset  = u.utc_offset
+            local_t = now_utc + timedelta(hours=offset)
+            if local_t.hour != FUN_FACT_HOUR:
+                continue
+            user_today = local_t.date()
+            if u.last_fun_fact_at == user_today:
+                continue
+
+            fact = await get_fun_fact(voice_hint(u))
+
+            try:
+                await bot.send_message(
+                    u.telegram_id,
+                    f"🎲 <b>факт дня</b>\n\n{fact}",
+                    parse_mode=ParseMode.HTML,
+                    disable_notification=u.silent_mode
+                )
+                u.last_fun_fact_at = user_today
                 await session.commit()
             except Exception:
                 pass
@@ -2776,6 +2879,19 @@ async def fallback_echo(message: Message):
     _fallback_timestamps[uid].append(now)
 
     user_text = message.text
+
+    # запоминаем как человек обычно пишет — потом используем это в AI-репликах
+    # (мотивация, напоминания, факт дня), чтобы бот звучал не как шаблон
+    voice_sample = user_text.strip().replace("\n", " ")[:300]
+    if voice_sample:
+        async with async_session_maker() as session:
+            u = (await session.execute(
+                select(User).where(User.telegram_id == message.from_user.id)
+            )).scalar_one_or_none()
+            if u:
+                u.voice_sample = voice_sample
+                await session.commit()
+
     system = (
         AI_SYSTEM_PROMPT +
         " Ты также отвечаешь на вопросы о боте. "
@@ -2787,20 +2903,7 @@ async def fallback_echo(message: Message):
     )
     prompt = f"пользователь написал: «{user_text}». ответь 1-2 предложения."
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.post(
-                GEMINI_URL,
-                params={"key": GEMINI_API_KEY},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 100, "temperature": 0.75},
-                    "systemInstruction": {"parts": [{"text": system}]},
-                }
-            )
-            reply = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-            reply = reply.rstrip(" .…")
-            if reply:
-                reply = reply[0].lower() + reply[1:]
+        reply = await _call_gemini(prompt, system_prompt=system, max_tokens=100, timeout=8.0)
     except Exception:
         reply = "что-то пошло не так у меня в голове 🤯 попробуй /faq или нажми на кнопку в меню"
 
@@ -2827,10 +2930,11 @@ async def main():
     dp.include_router(router)
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(daily_task,        "interval", minutes=1,  args=[bot])
-    scheduler.add_job(auto_skip_task,    "interval", minutes=1)
-    scheduler.add_job(weekly_stats_task, "interval", minutes=60, args=[bot])
-    scheduler.add_job(motivation_task,   "interval", minutes=60, args=[bot])
+    scheduler.add_job(daily_task,          "interval", minutes=1,  args=[bot])
+    scheduler.add_job(auto_skip_task,      "interval", minutes=1)
+    scheduler.add_job(weekly_stats_task,   "interval", minutes=60, args=[bot])
+    scheduler.add_job(motivation_task,     "interval", minutes=60, args=[bot])
+    scheduler.add_job(daily_fun_fact_task, "interval", minutes=60, args=[bot])
     scheduler.start()
     asyncio.create_task(_ai_worker(redis_client))
 
