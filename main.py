@@ -2685,7 +2685,7 @@ async def motivation_task(bot: Bot):
                 u.last_motivation_at = user_today
                 await session.commit()
             except Exception:
-                pass
+                logger.warning(f"не удалось отправить мотивацию user_id={u.telegram_id}", exc_info=True)
 
 async def weekly_stats_task(bot: Bot):
     async with async_session_maker() as session:
@@ -2764,7 +2764,7 @@ async def weekly_stats_task(bot: Bot):
                 u.last_weekly_stats_at = user_today
                 await session.commit()
             except Exception:
-                pass
+                logger.warning(f"не удалось отправить недельную сводку user_id={u.telegram_id}", exc_info=True)
 
 async def _daily_fact_task(bot: Bot, *, hour: int, kind: str, last_field: str) -> None:
     """Раз в день, в заданный час по локальному времени пользователя — факт нужной
@@ -2795,7 +2795,7 @@ async def _daily_fact_task(bot: Bot, *, hour: int, kind: str, last_field: str) -
                 setattr(u, last_field, user_today)
                 await session.commit()
             except Exception:
-                pass
+                logger.warning(f"не удалось отправить факт ({kind}) user_id={u.telegram_id}", exc_info=True)
 
 async def daily_animal_fact_task(bot: Bot):
     # 10:00 по локальному времени пользователя
@@ -2973,12 +2973,19 @@ async def main():
     dp.include_router(router)
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(daily_task,            "interval", minutes=1,  args=[bot])
-    scheduler.add_job(auto_skip_task,        "interval", minutes=1)
-    scheduler.add_job(weekly_stats_task,     "interval", minutes=60, args=[bot])
-    scheduler.add_job(motivation_task,       "interval", minutes=60, args=[bot])
-    scheduler.add_job(daily_animal_fact_task,  "interval", minutes=60, args=[bot])
-    scheduler.add_job(daily_history_fact_task, "interval", minutes=60, args=[bot])
+    # minutes=1 везде, а не 60: у interval-джобы APScheduler точка отсчёта —
+    # момент старта процесса, а не начало часа. При minutes=60 любой рестарт
+    # (деплой, краш) сдвигает окно срабатывания, и при частых рестартах джоба
+    # рискует вообще ни разу не попасть в нужный локальный час у пользователя.
+    # Каждая из задач ниже сама проверяет нужный час/день и не шлёт дважды
+    # (last_*_at), так что дергать их раз в минуту безопасно и не даёт дублей —
+    # по той же схеме, что уже работает в daily_task/auto_skip_task.
+    scheduler.add_job(daily_task,              "interval", minutes=1, args=[bot])
+    scheduler.add_job(auto_skip_task,          "interval", minutes=1)
+    scheduler.add_job(weekly_stats_task,       "interval", minutes=1, args=[bot])
+    scheduler.add_job(motivation_task,         "interval", minutes=1, args=[bot])
+    scheduler.add_job(daily_animal_fact_task,  "interval", minutes=1, args=[bot])
+    scheduler.add_job(daily_history_fact_task, "interval", minutes=1, args=[bot])
     scheduler.start()
     asyncio.create_task(_ai_worker(redis_client))
 
