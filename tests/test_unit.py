@@ -255,6 +255,36 @@ def test_get_fun_fact_history_falls_back_without_api_key():
     assert fact in m.HISTORY_FACTS_FALLBACK
 
 
+# ── _looks_non_russian / язык фактов ─────────────────────────────────────────
+
+def test_looks_non_russian_detects_ukrainian_letters():
+    assert m._looks_non_russian("цікавий факт про їжака")
+
+def test_looks_non_russian_false_for_plain_russian():
+    assert not m._looks_non_russian("интересный факт про ежа")
+
+def test_looks_non_russian_false_for_empty_string():
+    assert not m._looks_non_russian("")
+
+def test_get_fun_fact_falls_back_when_response_is_not_russian():
+    import asyncio
+    async def fake_gemini(*args, **kwargs):
+        return "цікавий факт про тварин"
+    with patch.object(m, "GEMINI_API_KEY", "fake-key"), \
+         patch.object(m, "_call_gemini", side_effect=fake_gemini):
+        fact = asyncio.run(m.get_fun_fact("animal"))
+    assert fact in m.ANIMAL_FACTS_FALLBACK
+
+def test_get_fun_fact_keeps_response_when_russian():
+    import asyncio
+    async def fake_gemini(*args, **kwargs):
+        return "интересный факт про ежей"
+    with patch.object(m, "GEMINI_API_KEY", "fake-key"), \
+         patch.object(m, "_call_gemini", side_effect=fake_gemini):
+        fact = asyncio.run(m.get_fun_fact("animal"))
+    assert fact == "интересный факт про ежей"
+
+
 # ── hourly_admin_fact_task ────────────────────────────────────────────────────
 
 def test_hourly_admin_fact_task_noop_without_admin_id():
