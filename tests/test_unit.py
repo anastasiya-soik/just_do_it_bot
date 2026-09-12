@@ -210,6 +210,28 @@ def test_voice_hint_missing_attribute_is_safe():
     assert m.voice_hint(NoVoice()) == ""
 
 
+# ── FACT_KINDS / get_fun_fact ────────────────────────────────────────────────────
+
+def test_fact_kinds_has_animal_and_history():
+    assert set(m.FACT_KINDS.keys()) == {"animal", "history"}
+
+def test_fact_kinds_each_has_fallback_list():
+    for kind, cfg in m.FACT_KINDS.items():
+        assert cfg["fallback"], f"{kind} has no fallback facts"
+
+def test_get_fun_fact_falls_back_without_api_key():
+    # без GEMINI_API_KEY (не задан в тестовом окружении) — сразу фолбэк, без сети
+    import asyncio
+    assert m.GEMINI_API_KEY is None
+    fact = asyncio.run(m.get_fun_fact("animal"))
+    assert fact in m.ANIMAL_FACTS_FALLBACK
+
+def test_get_fun_fact_history_falls_back_without_api_key():
+    import asyncio
+    fact = asyncio.run(m.get_fun_fact("history"))
+    assert fact in m.HISTORY_FACTS_FALLBACK
+
+
 # ── Premium — константы и логика ──────────────────────────────────────────────
 
 def test_stars_custom_price_is_100():
