@@ -232,6 +232,16 @@ def test_get_fun_fact_history_falls_back_without_api_key():
     assert fact in m.HISTORY_FACTS_FALLBACK
 
 
+# ── hourly_admin_fact_task ────────────────────────────────────────────────────
+
+def test_hourly_admin_fact_task_noop_without_admin_id():
+    # ADMIN_ID == 0 в тестовом окружении — задача должна тихо выйти,
+    # ничего не отправляя и не трогая БД
+    import asyncio
+    assert m.ADMIN_ID == 0
+    asyncio.run(m.hourly_admin_fact_task(MagicMock()))
+
+
 # ── Premium — константы и логика ──────────────────────────────────────────────
 
 def test_stars_custom_price_is_100():
