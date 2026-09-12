@@ -219,6 +219,29 @@ def test_fact_kinds_each_has_fallback_list():
     for kind, cfg in m.FACT_KINDS.items():
         assert cfg["fallback"], f"{kind} has no fallback facts"
 
+
+# ── pick_fact_kind (50/50) ───────────────────────────────────────────────────
+
+def test_pick_fact_kind_choices_match_fact_kinds():
+    assert set(m.FACT_KIND_CHOICES) == set(m.FACT_KINDS.keys())
+
+def test_pick_fact_kind_exactly_two_choices():
+    # 50/50 предполагает ровно два варианта — если появится третий,
+    # пропорции нужно продумать явно, а не унаследовать автоматически
+    assert len(m.FACT_KIND_CHOICES) == 2
+
+def test_pick_fact_kind_always_returns_valid_kind():
+    for _ in range(50):
+        assert m.pick_fact_kind() in m.FACT_KINDS
+
+def test_pick_fact_kind_roughly_even_split():
+    # статистическая проверка с широким допуском (40-60% на 2000 прогонов),
+    # чтобы не флакать при истинном равновероятном выборе
+    n = 2000
+    animal_count = sum(1 for _ in range(n) if m.pick_fact_kind() == "animal")
+    ratio = animal_count / n
+    assert 0.4 < ratio < 0.6, f"animal ratio {ratio} looks skewed for a 50/50 pick"
+
 def test_get_fun_fact_falls_back_without_api_key():
     # без GEMINI_API_KEY (не задан в тестовом окружении) — сразу фолбэк, без сети
     import asyncio
