@@ -485,44 +485,79 @@ async def get_ai_motivation(context: str) -> str:
     except Exception:
         return random.choice(TIPS)
 
-FUN_FACT_SYSTEM_PROMPT = (
-    "Ты — бот, который раз в день присылает пользователю один свежий, забавный или "
-    "удивительный факт либо шутку — что-то живое из интернета, а не избитую классику. "
-    "Используй поиск, чтобы по возможности зацепить что-то актуальное — новость, "
-    "тренд, случай за последние дни или недели. "
+ANIMAL_FACT_SYSTEM_PROMPT = (
+    "Ты — бот, который раз в день утром присылает пользователю один свежий, забавный "
+    "или удивительный факт про животных — что-то живое из интернета, а не избитую "
+    "классику. Используй поиск, чтобы по возможности зацепить что-то актуальное — "
+    "новость про животных, необычное поведение, случай за последние дни или недели. "
     "Пиши по-русски, живо, без канцелярита и без вступлений вроде «а знаете ли вы». "
     "1-3 предложения. Если не уверен в достоверности факта — выбери более безопасный "
     "и точно проверенный, не выдумывай."
 )
 
-FUN_FACTS_FALLBACK = [
+ANIMAL_FACTS_FALLBACK = [
     "осьминоги пробуют вкус лапами — рецепторы у них прямо на присосках 🐙",
-    "мёд практически не портится: археологи находили в гробницах съедобный мёд возрастом больше 3000 лет 🍯",
-    "бананы — это ягоды с ботанической точки зрения, а клубника и малина — нет 🍓",
     "у улитки около 14 000 зубов, и все они находятся на языке 🐌",
-    "самое короткое авиасообщение в мире длится меньше 2 минут — рейс между двумя шотландскими островами ✈️",
-    "человеческое сердце за сутки перекачивает столько крови, что ей можно было бы заполнить цистерну грузовика 🚚",
+    "жирафы спят всего 30-120 минут в сутки, часто стоя 🦒",
+    "у осьминогов три сердца, и два из них перестают биться, когда он плывёт 🐙",
+    "кошки не чувствуют сладкий вкус — нужный для этого рецептор у них не работает 🐱",
+    "пингвины делают предложение партнёру, вручая один особенно гладкий камешек 🐧",
 ]
 
-async def get_fun_fact(context: str = "") -> str:
+HISTORY_FACT_SYSTEM_PROMPT = (
+    "Ты — бот, который раз в день в обед присылает пользователю один интересный "
+    "исторический факт — что-то не самое избитое, желательно с деталью, которая "
+    "удивляет. Можно опираться на поиск, чтобы освежить память или найти малоизвестный "
+    "случай — историческая тема не бывает «устаревшей», в отличие от новостей. "
+    "Пиши по-русски, живо, без канцелярита и без вступлений вроде «а знаете ли вы». "
+    "1-3 предложения. Если не уверен в достоверности факта — выбери более безопасный "
+    "и точно проверенный, не выдумывай."
+)
+
+HISTORY_FACTS_FALLBACK = [
+    "самая короткая война в истории длилась 38 минут — между Великобританией и Занзибаром в 1896 году ⚔️",
+    "Клеопатра жила ближе по времени к запуску первых спутников, чем к постройке пирамиды Хеопса 🏺",
+    "Оксфордский университет старше империи ацтеков 🏛",
+    "первый в мире светофор появился в Лондоне в 1868 году — и взорвался спустя месяц ⚡",
+    "во время строительства Эйфелевой башни парижские деятели искусства требовали её снести, называя «уродливым скелетом» 🗼",
+    "у Наполеона было поместье на острове Эльба — и он успел провести там муниципальную реформу за 300 дней ссылки 🏝",
+]
+
+FACT_KINDS = {
+    "animal": {
+        "system_prompt": ANIMAL_FACT_SYSTEM_PROMPT,
+        "prompt": "пришли один свежий забавный факт про животных на сегодня.",
+        "fallback": ANIMAL_FACTS_FALLBACK,
+        "label": "🐾 факт дня про животных",
+    },
+    "history": {
+        "system_prompt": HISTORY_FACT_SYSTEM_PROMPT,
+        "prompt": "пришли один интересный исторический факт на сегодня.",
+        "fallback": HISTORY_FACTS_FALLBACK,
+        "label": "📜 исторический факт дня",
+    },
+}
+
+async def get_fun_fact(kind: str, context: str = "") -> str:
     """Отдельный (не через очередь) вызов AI с поиском — раз в день на пользователя,
     поэтому нет смысла делить с быстрой очередью мотивационных реплик."""
+    cfg = FACT_KINDS[kind]
     if not GEMINI_API_KEY:
-        return random.choice(FUN_FACTS_FALLBACK)
-    prompt = "пришли один свежий забавный факт или шутку из интернета на сегодня."
+        return random.choice(cfg["fallback"])
+    prompt = cfg["prompt"]
     if context:
         prompt += f" {context}"
     try:
         return await _call_gemini(
             prompt,
-            system_prompt=FUN_FACT_SYSTEM_PROMPT,
+            system_prompt=cfg["system_prompt"],
             grounded=True,
             clean=False,
             max_tokens=150,
             timeout=15.0,
         )
     except Exception:
-        return random.choice(FUN_FACTS_FALLBACK)
+        return random.choice(cfg["fallback"])
 
 def build_check_kb(cid: int, d_str: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
@@ -740,7 +775,8 @@ async def cmd_help(message: Message):
 
         "📊 статистика за неделю приходит автоматически каждое воскресенье в 20:00\n"
         "💡 мотивация от AI — по средам и воскресеньям в 12:00\n"
-        "🎲 факт дня — свежая штука из интернета каждое утро в 10:00\n\n"
+        "🐾 факт дня про животных — в 10:00\n"
+        "📜 исторический факт — в 12:00\n\n"
         "/cancel — отменить любое действие\n"
         "/faq — частые вопросы и советы по мотивации",
         parse_mode=ParseMode.HTML,
@@ -2730,37 +2766,44 @@ async def weekly_stats_task(bot: Bot):
             except Exception:
                 pass
 
-async def daily_fun_fact_task(bot: Bot):
-    """Раз в день, в 10:00 по локальному времени пользователя — свежий факт или
-    шутка из интернета (не привязано к челленджам, просто приятная мелочь)."""
-    FUN_FACT_HOUR = 10
+async def _daily_fact_task(bot: Bot, *, hour: int, kind: str, last_field: str) -> None:
+    """Раз в день, в заданный час по локальному времени пользователя — факт нужной
+    тематики (не привязано к челленджам, просто приятная мелочь)."""
+    label = FACT_KINDS[kind]["label"]
     async with async_session_maker() as session:
         now_utc = datetime.now(timezone.utc)
         res = await session.execute(select(User))
         for u in res.scalars():
             if u.utc_offset is None:
                 continue  # ещё не прошёл онбординг
-            offset  = u.utc_offset
-            local_t = now_utc + timedelta(hours=offset)
-            if local_t.hour != FUN_FACT_HOUR:
+            local_t = now_utc + timedelta(hours=u.utc_offset)
+            if local_t.hour != hour:
                 continue
             user_today = local_t.date()
-            if u.last_fun_fact_at == user_today:
+            if getattr(u, last_field) == user_today:
                 continue
 
-            fact = await get_fun_fact(voice_hint(u))
+            fact = await get_fun_fact(kind, voice_hint(u))
 
             try:
                 await bot.send_message(
                     u.telegram_id,
-                    f"🎲 <b>факт дня</b>\n\n{fact}",
+                    f"{label}\n\n{fact}",
                     parse_mode=ParseMode.HTML,
                     disable_notification=u.silent_mode
                 )
-                u.last_fun_fact_at = user_today
+                setattr(u, last_field, user_today)
                 await session.commit()
             except Exception:
                 pass
+
+async def daily_animal_fact_task(bot: Bot):
+    # 10:00 по локальному времени пользователя
+    await _daily_fact_task(bot, hour=10, kind="animal", last_field="last_fun_fact_at")
+
+async def daily_history_fact_task(bot: Bot):
+    # 12:00 по локальному времени пользователя
+    await _daily_fact_task(bot, hour=12, kind="history", last_field="last_history_fact_at")
 
 @router.message(Command("faq"))
 async def cmd_faq(message: Message):
@@ -2930,11 +2973,12 @@ async def main():
     dp.include_router(router)
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(daily_task,          "interval", minutes=1,  args=[bot])
-    scheduler.add_job(auto_skip_task,      "interval", minutes=1)
-    scheduler.add_job(weekly_stats_task,   "interval", minutes=60, args=[bot])
-    scheduler.add_job(motivation_task,     "interval", minutes=60, args=[bot])
-    scheduler.add_job(daily_fun_fact_task, "interval", minutes=60, args=[bot])
+    scheduler.add_job(daily_task,            "interval", minutes=1,  args=[bot])
+    scheduler.add_job(auto_skip_task,        "interval", minutes=1)
+    scheduler.add_job(weekly_stats_task,     "interval", minutes=60, args=[bot])
+    scheduler.add_job(motivation_task,       "interval", minutes=60, args=[bot])
+    scheduler.add_job(daily_animal_fact_task,  "interval", minutes=60, args=[bot])
+    scheduler.add_job(daily_history_fact_task, "interval", minutes=60, args=[bot])
     scheduler.start()
     asyncio.create_task(_ai_worker(redis_client))
 

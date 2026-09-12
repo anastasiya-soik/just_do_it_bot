@@ -39,7 +39,8 @@ class User(Base):
     last_notified_at:    Mapped[date | None] = mapped_column(Date, nullable=True)
     last_weekly_stats_at:  Mapped[date | None] = mapped_column(Date, nullable=True)
     last_motivation_at:    Mapped[date | None] = mapped_column(Date, nullable=True)
-    last_fun_fact_at:      Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_fun_fact_at:      Mapped[date | None] = mapped_column(Date, nullable=True)  # факт про животных, 10:00
+    last_history_fact_at:  Mapped[date | None] = mapped_column(Date, nullable=True)  # исторический факт, 12:00
     xp:               Mapped[int]         = mapped_column(Integer, default=0)
 
     # короткий образец того, как пользователь сам пишет боту (см. fallback_echo) —

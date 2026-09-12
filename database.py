@@ -26,6 +26,7 @@ async def init_db() -> None:
         for col in (
             "voice_sample VARCHAR(300)",
             "last_fun_fact_at DATE",
+            "last_history_fact_at DATE",
         ):
             try:
                 await conn.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col}"))
