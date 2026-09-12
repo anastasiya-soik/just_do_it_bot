@@ -538,6 +538,14 @@ FACT_KINDS = {
     },
 }
 
+# Явный список 50/50, а не list(FACT_KINDS.keys()): если позже добавится третья
+# тема, пропорция между animal/history не должна незаметно съехать на 1/3.
+FACT_KIND_CHOICES = ("animal", "history")
+
+def pick_fact_kind() -> str:
+    """Равновероятный выбор темы факта — 50% animal, 50% history."""
+    return random.choice(FACT_KIND_CHOICES)
+
 async def get_fun_fact(kind: str, context: str = "") -> str:
     """Отдельный (не через очередь) вызов AI с поиском — раз в день на пользователя,
     поэтому нет смысла делить с быстрой очередью мотивационных реплик."""
@@ -2809,7 +2817,7 @@ async def daily_history_fact_task(bot: Bot):
 @router.message(Command("fact"))
 async def cmd_fact(message: Message):
     """Факт по требованию — любого типа, сразу, без ожидания расписания."""
-    kind = random.choice(list(FACT_KINDS.keys()))
+    kind = pick_fact_kind()
     async with async_session_maker() as session:
         u = (await session.execute(
             select(User).where(User.telegram_id == message.from_user.id)
@@ -2819,15 +2827,15 @@ async def cmd_fact(message: Message):
 
 async def hourly_admin_fact_task(bot: Bot):
     """Личная фишка владельца бота: раз в час — новый случайный факт (не привязан
-    к суточным слотам выше, буквально каждый час, любой из FACT_KINDS). Только для
-    ADMIN_ID — остальным пользователям это не шлётся."""
+    к суточным слотам выше, буквально каждый час), тема 50/50 между animal и
+    history (см. pick_fact_kind). Только для ADMIN_ID — остальным не шлётся."""
     if not ADMIN_ID:
         return
     async with async_session_maker() as session:
         u = (await session.execute(
             select(User).where(User.telegram_id == ADMIN_ID)
         )).scalar_one_or_none()
-    kind = random.choice(list(FACT_KINDS.keys()))
+    kind = pick_fact_kind()
     fact = await get_fun_fact(kind, voice_hint(u) if u else "")
     try:
         await bot.send_message(
