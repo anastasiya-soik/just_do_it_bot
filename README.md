@@ -13,7 +13,7 @@ Telegram bot for breaking bad habits. Track streaks, get AI coaching, earn stars
 - Freezes (lives) to save streaks when you slip
 - AI coach (Google Gemini) responds with encouragement, adapting to how you write and to your streak
 - Gentle AI nudge when you forget to check in
-- Daily facts pulled from a live web search — an animal fact at 10:00, a historical one at 12:00
+- Daily facts pulled from a live web search — an animal fact at 10:00, a historical one at 12:00, plus `/fact` for one on demand and an hourly stream for the bot owner
 - Weekly digest with AI commentary
 - Gamification: XP, ranks, heatmap of last 7 days
 - Telegram Stars for premium (custom challenges, extra freezes)
@@ -100,7 +100,7 @@ Telegram бот для отказа от вредных привычек. Стр
 - Заморозки (жизни) для спасения стрика при срыве
 - AI-коуч (Google Gemini) с поддерживающими ответами — подстраивается под манеру речи и стрик
 - Мягкое AI-напоминание, если забыл отметиться
-- Ежедневные факты через живой веб-поиск — про животных в 10:00, исторический в 12:00
+- Ежедневные факты через живой веб-поиск — про животных в 10:00, исторический в 12:00, плюс `/fact` по требованию и часовая рассылка для владельца бота
 - Еженедельная сводка с AI-комментарием
 - Геймификация: XP, ранги, тепловая карта за 7 дней
 - Telegram Stars для премиума (свои челленджи, доп заморозки)

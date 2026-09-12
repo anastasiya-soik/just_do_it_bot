@@ -63,6 +63,7 @@ async def set_main_menu(bot: Bot, admin_id: int = 0) -> None:
         BotCommand(command="/start",    description="меню"),
         BotCommand(command="/help",     description="как пользоваться"),
         BotCommand(command="/faq",      description="частые вопросы"),
+        BotCommand(command="/fact",     description="факт дня по требованию"),
         BotCommand(command="/feedback", description="сообщить о баге или идее"),
         BotCommand(command="/cancel",   description="отмена"),
     ]

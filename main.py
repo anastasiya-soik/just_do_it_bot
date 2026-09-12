@@ -776,7 +776,8 @@ async def cmd_help(message: Message):
         "📊 статистика за неделю приходит автоматически каждое воскресенье в 20:00\n"
         "💡 мотивация от AI — по средам и воскресеньям в 12:00\n"
         "🐾 факт дня про животных — в 10:00\n"
-        "📜 исторический факт — в 12:00\n\n"
+        "📜 исторический факт — в 12:00\n"
+        "🎲 не хочешь ждать — /fact пришлёт факт сразу\n\n"
         "/cancel — отменить любое действие\n"
         "/faq — частые вопросы и советы по мотивации",
         parse_mode=ParseMode.HTML,
@@ -2805,6 +2806,38 @@ async def daily_history_fact_task(bot: Bot):
     # 12:00 по локальному времени пользователя
     await _daily_fact_task(bot, hour=12, kind="history", last_field="last_history_fact_at")
 
+@router.message(Command("fact"))
+async def cmd_fact(message: Message):
+    """Факт по требованию — любого типа, сразу, без ожидания расписания."""
+    kind = random.choice(list(FACT_KINDS.keys()))
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )).scalar_one_or_none()
+    fact = await get_fun_fact(kind, voice_hint(u) if u else "")
+    await message.answer(f"{FACT_KINDS[kind]['label']}\n\n{fact}", parse_mode=ParseMode.HTML)
+
+async def hourly_admin_fact_task(bot: Bot):
+    """Личная фишка владельца бота: раз в час — новый случайный факт (не привязан
+    к суточным слотам выше, буквально каждый час, любой из FACT_KINDS). Только для
+    ADMIN_ID — остальным пользователям это не шлётся."""
+    if not ADMIN_ID:
+        return
+    async with async_session_maker() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == ADMIN_ID)
+        )).scalar_one_or_none()
+    kind = random.choice(list(FACT_KINDS.keys()))
+    fact = await get_fun_fact(kind, voice_hint(u) if u else "")
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"⏰ {FACT_KINDS[kind]['label']}\n\n{fact}",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        logger.warning("не удалось отправить часовой факт админу", exc_info=True)
+
 @router.message(Command("faq"))
 async def cmd_faq(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -2939,7 +2972,7 @@ async def fallback_echo(message: Message):
         AI_SYSTEM_PROMPT +
         " Ты также отвечаешь на вопросы о боте. "
         "Кнопки бота: «📊 мой прогресс», «🎯 новый челлендж», «📝 поправить день», «⚙️ настройки». "
-        "Команды: /help — гайд, /faq — частые вопросы, /cancel — отмена. "
+        "Команды: /help — гайд, /faq — частые вопросы, /fact — факт по требованию, /cancel — отмена. "
         "Не придумывай несуществующие кнопки и команды. "
         "Если жалуется на мотивацию — поддержи с лёгким юмором, намекни на /faq. "
         "Если спрашивает как пользоваться — /help."
@@ -2986,6 +3019,10 @@ async def main():
     scheduler.add_job(motivation_task,         "interval", minutes=1, args=[bot])
     scheduler.add_job(daily_animal_fact_task,  "interval", minutes=1, args=[bot])
     scheduler.add_job(daily_history_fact_task, "interval", minutes=1, args=[bot])
+    # cron minute=0 — срабатывает ровно на границе часа независимо от того, когда
+    # стартовал процесс (в отличие от interval, у которого точка отсчёта — момент
+    # старта; см. историю бага с "факт не пришёл")
+    scheduler.add_job(hourly_admin_fact_task, "cron", minute=0, args=[bot])
     scheduler.start()
     asyncio.create_task(_ai_worker(redis_client))
 
